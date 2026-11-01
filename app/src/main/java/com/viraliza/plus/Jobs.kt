@@ -91,7 +91,15 @@ object Jobs {
         }
         Log.i("$tag: @${info.author} · ${info.comments} comentários · botão: ${Tk.label(info.commentBtn!!).take(50)}")
         s.click(info.commentBtn!!)
-        val sheet = s.waitFor(8000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
+        var sheet = s.waitFor(5000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
+        if (sheet == null) {
+            // tenta um toque "de dedo" no botão
+            Log.i("$tag: comentários não abriram com o clique; tentando toque na tela")
+            s.autoDump("apos-clique-comentarios")
+            val r = Tk.rect(info.commentBtn!!)
+            s.tap(r.centerX().toFloat(), r.centerY().toFloat())
+            sheet = s.waitFor(6000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
+        }
         if (sheet == null) {
             Log.i("$tag: os comentários não abriram (ou não achei o texto 'Responder')")
             s.autoDump("comentarios-nao-abriram")
@@ -358,10 +366,13 @@ object Jobs {
                 !navWords.matches(t) && !t.contains("som original") && !t.contains("original sound") &&
                 !(n.viewIdResourceName ?: "").contains("music")
         }.sortedBy { Tk.rect(it).top }
-        val authorNode = bottomLeft.firstOrNull { it.text.toString().startsWith("@") }
+        val byId = vis.firstOrNull { (it.viewIdResourceName ?: "").endsWith(":id/title") && (it.className?.toString() ?: "").contains("Button") && !it.text.isNullOrBlank() }
+        val descNode = vis.firstOrNull { (it.viewIdResourceName ?: "").endsWith(":id/desc") && !it.text.isNullOrBlank() }
+        val authorNode = byId ?: bottomLeft.firstOrNull { it.text.toString().startsWith("@") }
             ?: bottomLeft.firstOrNull { n -> val t = n.text.toString(); !t.contains(' ') && t.length in 2..30 && Tk.parseCount(t) < 0 }
         v.author = authorNode?.text?.toString()?.removePrefix("@") ?: ""
-        v.caption = bottomLeft.filter { it !== authorNode }.maxByOrNull { it.text.length }?.text?.toString()?.take(200) ?: ""
+        v.caption = (descNode?.text?.toString() ?: bottomLeft.filter { it !== authorNode }.maxByOrNull { it.text.length }?.text?.toString() ?: "")
+            .replace("\u2060", "").removeSuffix("mais").removeSuffix("…").trim().take(200)
         for (n in bottomLeft) {
             val t = n.text.toString().replace("·", "").trim()
             if (Tk.parseAgeMinutes(t) >= 0) { v.age = t; break }

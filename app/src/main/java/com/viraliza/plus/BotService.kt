@@ -202,21 +202,28 @@ class BotService : AccessibilityService() {
         }
     }
 
-    /** Raiz da janela do TikTok (ignora o balão e o teclado). */
-    fun tkRoot(): AccessibilityNodeInfo? {
+    /** Todas as janelas do TikTok, da de cima para a de baixo (a lista de comentários abre numa janela própria). */
+    fun tkRoots(): List<AccessibilityNodeInfo> {
+        val out = ArrayList<Pair<Int, AccessibilityNodeInfo>>()
         try {
             for (w in windows) {
                 if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
                 val r = w.root ?: continue
-                if (r.packageName?.toString() in Tk.PACKAGES) return r
+                if (r.packageName?.toString() in Tk.PACKAGES) out.add(w.layer to r)
             }
         } catch (_: Throwable) {}
-        val r = rootInActiveWindow
-        if (r != null && r.packageName?.toString() in Tk.PACKAGES) return r
-        return null
+        if (out.isEmpty()) {
+            val r = rootInActiveWindow
+            if (r != null && r.packageName?.toString() in Tk.PACKAGES) return listOf(r)
+        }
+        return out.sortedByDescending { it.first }.map { it.second }
     }
 
-    fun nodes(): List<AccessibilityNodeInfo> = Tk.all(tkRoot())
+    /** Raiz da janela do TikTok que está por cima. */
+    fun tkRoot(): AccessibilityNodeInfo? = tkRoots().firstOrNull()
+
+    /** Nós de todas as janelas do TikTok (as de cima primeiro). */
+    fun nodes(): List<AccessibilityNodeInfo> = tkRoots().flatMap { Tk.all(it) }
 
     fun visible(n: AccessibilityNodeInfo): Boolean {
         if (!n.isVisibleToUser) return false
@@ -311,9 +318,17 @@ class BotService : AccessibilityService() {
 
     /** Guarda a "foto" dos botões da tela atual (vai junto no relatório). */
     fun autoDump(reason: String) {
-        val root = tkRoot() ?: rootInActiveWindow
-        val header = "motivo=$reason · app=${root?.packageName ?: "?"} · tela=${W}x$H\n"
-        Log.saveDump(reason, header + Tk.dump(root))
+        val sb = StringBuilder("motivo=$reason · tela=${W}x$H\n")
+        try {
+            for (w in windows) {
+                val r = w.root
+                sb.append("\n##### JANELA tipo=${w.type} camada=${w.layer} ativa=${w.isActive} app=${r?.packageName} titulo=${w.title}\n")
+                if (r != null && r.packageName?.toString() != packageName) sb.append(Tk.dump(r))
+            }
+        } catch (e: Throwable) {
+            sb.append("(erro lendo janelas: ${e.message})\n").append(Tk.dump(rootInActiveWindow))
+        }
+        Log.saveDump(reason, sb.toString())
     }
 
     /** Botão 🩺: salva a tela atual e gera o relatório em Downloads/Viraliza. */
