@@ -67,7 +67,7 @@ class BotService : AccessibilityService() {
             T.init(this)
             Fonts.init(this)
             overlay = Overlay(this)
-            main.post { overlay.show() }
+            main.postDelayed(visCheck, 500)
             Log.i("Robô ligado")
         } catch (e: Throwable) {
             Store.saveError("Erro ao ligar o robô: " + android.util.Log.getStackTraceString(e))
@@ -76,19 +76,32 @@ class BotService : AccessibilityService() {
         Store.changed()
     }
 
+    private val visCheck = Runnable { updateOverlayVisibility() }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString() ?: return
-            if (pkg == "com.android.systemui") return
-            foregroundPkg = pkg
-            main.post { updateOverlayVisibility() }
+        val t = event.eventType
+        if (t == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || t == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            main.removeCallbacks(visCheck)
+            main.postDelayed(visCheck, 350)
         }
     }
 
+    /** App que está de verdade na frente (ignora teclado, barra do sistema e o balão). */
+    private fun topAppPackage(): String? {
+        return try {
+            windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                .sortedByDescending { it.layer }
+                .firstNotNullOfOrNull { it.root?.packageName?.toString() }
+        } catch (_: Throwable) { null }
+    }
+
+    /** Balão só aparece com o TikTok na frente (ou enquanto o robô trabalha). */
     private fun updateOverlayVisibility() {
         if (!hasOverlay) return
-        overlay.show()   // fica sempre na tela enquanto o robô estiver ligado
+        val top = topAppPackage() ?: return   // sem certeza: não mexe
+        foregroundPkg = top
+        if (top in Tk.PACKAGES || busy) overlay.show() else overlay.hide()
     }
 
     override fun onInterrupt() {}
