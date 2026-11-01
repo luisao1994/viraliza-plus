@@ -584,13 +584,23 @@ class MainActivity : Activity() {
     }
 
     private fun sendReport() {
-        try {
-            val (uri, path) = Report.save(this)
-            toast("Relatório salvo em $path")
-            if (uri != null) startActivity(Report.shareIntent(uri))
-        } catch (e: Throwable) {
-            toast("Não consegui gerar: ${e.message}")
-        }
+        toast("Gerando relatório…")
+        Thread {
+            try {
+                val (uri, path) = Report.save(this)
+                runOnUiThread {
+                    toast("Relatório salvo em $path")
+                    if (uri != null) runCatching { startActivity(Report.shareIntent(uri)) }
+                }
+            } catch (e: Throwable) {
+                Store.saveError("Relatório: " + android.util.Log.getStackTraceString(e))
+                runOnUiThread {
+                    AlertDialog.Builder(this).setTitle("Não consegui gerar o relatório")
+                        .setMessage("${e.javaClass.simpleName}: ${e.message}\n\nMande um print desta mensagem.")
+                        .setPositiveButton("OK", null).show()
+                }
+            }
+        }.start()
     }
 
     private fun robotOffDialog() {

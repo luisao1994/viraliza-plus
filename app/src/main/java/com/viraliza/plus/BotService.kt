@@ -346,14 +346,17 @@ class BotService : AccessibilityService() {
 
     /** Botão 🩺: salva a tela atual e gera o relatório em Downloads/Viraliza. */
     fun saveDiagnostic() {
-        autoDump("manual")
-        try {
-            val (_, path) = Report.save(this)
-            toast("Relatório salvo em $path")
-            Log.i("Relatório salvo: $path")
-        } catch (e: Throwable) {
-            toast("Não consegui salvar o relatório: ${e.message}")
-        }
+        Thread {
+            autoDump("manual")
+            try {
+                val (_, path) = Report.save(this)
+                toast("Relatório salvo em $path")
+                Log.i("Relatório salvo: $path")
+            } catch (e: Throwable) {
+                Store.saveError("Relatório: " + android.util.Log.getStackTraceString(e))
+                toast("Não consegui salvar o relatório: ${e.message}")
+            }
+        }.start()
     }
 
     private fun realHeight(): Int {

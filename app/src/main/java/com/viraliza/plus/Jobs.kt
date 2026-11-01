@@ -11,7 +11,8 @@ class Row(
     val ageMin: Long,
     val replyRect: Rect,
     val like: AccessibilityNodeInfo?,
-    val liked: Boolean?   // null = não deu para saber
+    val liked: Boolean?,  // null = não deu para saber
+    val likeTap: Boolean = false   // true = tocar com o "dedo" (o botão não aceita clique direto)
 )
 
 /** Informações lidas da tela de um vídeo. */
@@ -128,7 +129,7 @@ object Jobs {
             if (firstScan) {
                 firstScan = false
                 Log.i("$tag: ${rows.size} comentários na tela · com coração: ${rows.count { it.like != null }} · já curtidos: ${rows.count { it.liked == true }}")
-                rows.take(3).forEach { r -> Log.i("   · ${r.key.take(60)} · idade=${r.ageMin}min · curtir=${r.like?.let { Tk.rect(it).toShortString() + " " + Tk.label(it).take(40) } ?: "nenhum"}") }
+                rows.take(3).forEach { r -> Log.i("   · ${r.key.take(60)} · idade=${r.ageMin}min · curtir=${r.like?.let { Tk.rect(it).toShortString() + " " + Tk.label(it).take(40) + if (r.likeTap) " (toque)" else "" } ?: "nenhum"} · estado=${r.liked}") }
                 if (rows.isEmpty() || rows.none { it.like != null }) s.autoDump("comentarios-abertos")
             }
             var acted = false
@@ -161,7 +162,8 @@ object Jobs {
                     if (!noLikeDumped) { noLikeDumped = true; Log.i("$tag: não achei o coração de '${row.author.take(30)}'"); s.autoDump("sem-coracao") }
                     continue
                 }
-                if (!s.click(like)) {
+                val clicked = if (row.likeTap) { val r = Tk.rect(like); s.tap(r.centerX().toFloat(), r.centerY().toFloat()) } else s.click(like)
+                if (!clicked) {
                     clickFails++
                     Log.i("$tag: o toque no coração falhou")
                     if (clickFails >= 5) { s.autoDump("toque-falhou"); return done }
@@ -252,15 +254,23 @@ object Jobs {
                     if (a >= 0) { age = a; break }
                 }
             }
-            // botão de curtir: à direita, na mesma linha (o coração vem antes do "não curtir")
-            val cands = vis.filter { n ->
+            // botão de curtir: à direita do comentário (na altura do texto ou do "Responder")
+            val blockTop = block.first().second.top
+            val lo = blockTop - s.dp(14); val hi = rr.bottom + s.dp(22)
+            val targets = ArrayList<Pair<AccessibilityNodeInfo, Boolean>>()
+            val seenRects = HashSet<String>()
+            for (n in vis) {
                 val r = Tk.rect(n)
-                r.centerY() in (rr.top - s.dp(22))..(rr.bottom + s.dp(22)) && r.centerX() > W * 0.6
-            }.mapNotNull { Tk.clickableAncestor(it) }.distinctBy { Tk.rect(it).flattenToString() }
-                .filter { Tk.rect(it).centerX() > W * 0.6 && Tk.rect(it).width() < W * 0.4 }
-            val notDislike = cands.filter { c -> !isDislike(c) }
-            val like = notDislike.minByOrNull { Tk.rect(it).left }
-            out.add(Row(key, author, age, rr, like, like?.let { likedState(it) }))
+                if (r.centerY() !in lo..hi || r.centerX() <= W * 0.62 || r.width() > W * 0.35) continue
+                val anc = Tk.clickableAncestor(n)
+                val t = if (anc != null && Tk.rect(anc).width() < W * 0.4 && Tk.rect(anc).centerX() > W * 0.6) anc to false else n to true
+                if (seenRects.add(Tk.rect(t.first).flattenToString())) targets.add(t)
+            }
+            val notDislike = targets.filter { !isDislike(it.first) }
+            val labeled = notDislike.filter { val l = Tk.all(it.first).joinToString(" ") { x -> Tk.label(x) }; l.contains("curt") || l.contains("like") }
+            val pick = (labeled.ifEmpty { notDislike }).minWithOrNull(compareBy({ Tk.rect(it.first).left / s.dp(24) }, { Tk.rect(it.first).top }))
+            val like = pick?.first
+            out.add(Row(key, author, age, rr, like, like?.let { likedState(it) }, pick?.second ?: false))
         }
         return out
     }

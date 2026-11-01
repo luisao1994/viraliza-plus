@@ -32,9 +32,9 @@ object Report {
         val err = Store.lastError()
         if (err.isNotBlank()) sb.append("=== ÚLTIMO ERRO ===\n").append(err).append("\n\n")
         sb.append("=== REGISTRO ===\n").append(Log.all().lines().takeLast(500).joinToString("\n")).append("\n\n")
-        for (f in Log.dumps()) {
+        for (f in Log.dumps().takeLast(5)) {
             sb.append("=== TELA: ${f.name} ===\n")
-            sb.append(runCatching { f.readText() }.getOrDefault("(não li)").take(150_000)).append("\n\n")
+            sb.append(runCatching { f.readText() }.getOrDefault("(não li)").take(120_000)).append("\n\n")
         }
         return sb.toString()
     }

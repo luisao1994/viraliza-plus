@@ -101,7 +101,15 @@ class Overlay(private val svc: BotService) {
         setPadding(ctx.dp(10), 0, ctx.dp(10), 0)
         background = GradientDrawable().apply { setColor(Color.argb(60, 255, 255, 255)); cornerRadius = ctx.dpf(12f) }
         layoutParams = LinearLayout.LayoutParams(-2, ctx.dp(34)).apply { rightMargin = ctx.dp(6) }
-        setOnClickListener { onClick() }
+        // responde assim que o dedo encosta: os toques do robô cancelariam um clique normal
+        var last = 0L
+        setOnTouchListener { v, e ->
+            if (e.action == MotionEvent.ACTION_DOWN) {
+                val now = System.currentTimeMillis()
+                if (now - last > 600) { last = now; v.alpha = 0.5f; v.postDelayed({ v.alpha = 1f }, 200); onClick() }
+            }
+            true
+        }
     }
 
     private fun onAdd() {
