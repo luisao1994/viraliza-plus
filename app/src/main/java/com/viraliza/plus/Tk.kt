@@ -36,7 +36,7 @@ object Tk {
     fun norm(s: CharSequence?): String {
         if (s == null) return ""
         return Normalizer.normalize(s.toString(), Normalizer.Form.NFD)
-            .replace(Regex("\\p{Mn}+"), "").lowercase().trim()
+            .replace(Regex("[\\p{Mn}\\p{Cf}]+"), "").lowercase().trim()   // tira acentos e caracteres invisíveis (‎ ⁨ ⁩)
     }
 
     fun label(n: AccessibilityNodeInfo): String = norm((n.text ?: "").toString() + " " + (n.contentDescription ?: ""))

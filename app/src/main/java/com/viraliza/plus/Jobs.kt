@@ -12,7 +12,8 @@ class Row(
     val replyRect: Rect,
     val like: AccessibilityNodeInfo?,
     val liked: Boolean?,  // null = não deu para saber
-    val likeTap: Boolean = false   // true = tocar com o "dedo" (o botão não aceita clique direto)
+    val likeTap: Boolean = false,  // true = tocar com o "dedo" (o botão não aceita clique direto)
+    val indent: Int = replyRect.left   // esquerda do nome do autor (respostas ficam mais para a direita)
 )
 
 /** Informações lidas da tela de um vídeo. */
@@ -44,7 +45,7 @@ object Jobs {
             val tag = "Post ${i + 1}/${posts.size}"
             s.status(tag, "Abrindo ${p.author.ifBlank { "post" }}…")
             val r = runCatching { doPost(s, p, cfg, countOnly, pacer, tag) }
-            r.exceptionOrNull()?.let { if (it is StopException) throw it else Log.i("$tag: erro ${it.message}") }
+            r.exceptionOrNull()?.let { if (it is StopException) throw it else Log.i("$tag: erro ${it.javaClass.simpleName}: ${it.message} @ ${it.stackTrace.firstOrNull { e -> e.className.contains("viraliza") }}") }
             val n = r.getOrDefault(0L)
             if (n == 0L) s.autoDump("post-${i + 1}-zero")
             if (countOnly) {
@@ -111,7 +112,9 @@ object Jobs {
             return 0
         }
         s.nap(600)
-        setOrder(s, cfg.order, tag)
+        val orderOk = setOrder(s, cfg.order, tag)
+        val likedBefore = Store.likedKeys(p.url)
+        if (likedBefore.isNotEmpty()) Log.i("$tag: ${likedBefore.size} comentários já curtidos antes neste post (vou pular)")
 
         val seen = HashSet<String>()
         val clickedExpanders = HashSet<String>()
@@ -127,9 +130,10 @@ object Jobs {
         while (true) {
             s.checkStop()
             s.ensureTikTok(3000)
+            closeSortMenu(s, tag)
             val ns = s.nodes()
             val rows = scanRows(s, ns)
-            rows.forEach { mainLeft = minOf(mainLeft, it.replyRect.left) }
+            rows.forEach { mainLeft = minOf(mainLeft, it.indent) }
             if (firstScan) {
                 firstScan = false
                 Log.i("$tag: ${rows.size} comentários na tela · com coração: ${rows.count { it.like != null }} · já curtidos: ${rows.count { it.liked == true }}")
@@ -141,20 +145,21 @@ object Jobs {
             for (row in rows) {
                 if (!seen.add(row.key)) continue
                 fresh++
-                val isReply = row.replyRect.left > mainLeft + s.dp(20)
+                val isReply = row.indent > mainLeft + s.dp(20)
                 if (cfg.which == Which.MAIN && isReply) continue
                 if (cfg.which == Which.REPLIES && !isReply) continue
                 if (cfg.maxAgeMin > 0 && row.ageMin >= 0) {
                     if (row.ageMin > cfg.maxAgeMin) {
                         if (!isReply) oldStreak++
-                        if (cfg.order == Order.RECENT && oldStreak >= 4) {
+                        // só dá pra parar aqui se a lista está mesmo em "Mais novos"
+                        if (cfg.order == Order.RECENT && orderOk && oldStreak >= 4) {
                             Log.i("$tag: chegou nos comentários mais velhos que ${RunConfig.ageLabel(cfg.maxAgeMin)}")
                             return done
                         }
                         continue
                     } else if (!isReply) oldStreak = 0
                 }
-                if (row.liked == true) continue
+                if (row.liked == true || row.key in likedBefore) continue
                 if (countOnly) {
                     done++
                     if (done % 25 == 0L) s.status("$tag · contando", "$done comentários até agora")
@@ -166,7 +171,12 @@ object Jobs {
                     if (!noLikeDumped) { noLikeDumped = true; Log.i("$tag: não achei o coração de '${row.author.take(30)}'"); s.autoDump("sem-coracao") }
                     continue
                 }
-                val clicked = if (row.likeTap) { val r = Tk.rect(like); s.tap(r.centerX().toFloat(), r.centerY().toFloat()) } else s.click(like)
+                val clicked = if (row.likeTap) {
+                    // toca no desenho do coração (não no número), que é o alvo certo
+                    val heart = Tk.all(like).drop(1).firstOrNull { (it.className?.toString() ?: "").contains("Image") && Tk.rect(it).width() > 0 }
+                    val r = Tk.rect(heart ?: like)
+                    s.tap(r.centerX().toFloat(), r.centerY().toFloat())
+                } else s.click(like)
                 if (!clicked) {
                     clickFails++
                     Log.i("$tag: o toque no coração falhou")
@@ -175,6 +185,8 @@ object Jobs {
                 }
                 done++
                 pacer.liked()
+                Store.addLikedKey(p.url, row.key)
+                likedBefore.add(row.key)
                 Store.updatePost(p.url) { it.liked++ }
                 s.status("$tag · ${done} curtidas", "Hoje: ${Store.likedToday()} · ${row.author.take(24)}")
                 if (done >= goal) { Log.i("$tag: meta de ${cfg.perPost} curtidas no post"); return done }
@@ -227,64 +239,92 @@ object Jobs {
         return Tk.norm(n.text) + "#" + parentText + "#" + (r.left / 10)
     }
 
-    private val SKIP_TEXT = Regex("^(responder|reply|criador|creator|autor|author|fixado|pinned|curtido pelo criador|liked by creator|\\d+|ver .*|view .*|·.*)$")
+    private val SKIP_TEXT = Regex("^(responder|reply|criador|creator|autor|author|fixado|pinned|curtido pelo criador|liked by creator|\\d+|ver .*|view .*|exibir .*|·.*)$")
+    private val COUNT_HEADER = Regex("^[\\d.,\\s]+(mil\\s+|mi\\s+|k\\s+)?(comentarios?|comments?)$")
 
-    /** Lê os comentários visíveis: cada um tem um "Responder" embaixo. */
+    /** A lista rolável dos comentários (só o que está dentro dela é comentário). */
+    fun commentList(s: BotService, ns: List<AccessibilityNodeInfo>): Rect? =
+        ns.filter { it.isScrollable && s.visible(it) }
+            .map { it to Tk.rect(it) }
+            .filter { (n, r) -> r.top > s.H * 0.2 && Tk.all(n).any { isReplyLabel(it) } }
+            .minByOrNull { it.second.height() }   // a mais interna
+            ?.second
+
+    /**
+     * Lê os comentários visíveis. Cada comentário é um bloco (linha da lista) que tem
+     * nome, texto, idade, "Responder" e o coração à direita.
+     * Só entram comentários que estão INTEIROS dentro da lista — os cortados no topo/fundo
+     * ficam para depois da rolagem (antes o robô tocava no ícone de ordenação achando que era um coração).
+     */
     fun scanRows(s: BotService, ns: List<AccessibilityNodeInfo>): List<Row> {
         val W = s.W
-        val vis = ns.filter { s.visible(it) }
-        val replies = vis.filter { isReplyLabel(it) }.map { it to Tk.rect(it) }.sortedBy { it.second.top }
-        val texts = vis.filter { !it.text.isNullOrBlank() }.map { it to Tk.rect(it) }
+        val list = commentList(s, ns) ?: Rect(0, (s.H * 0.35).toInt(), W, (s.H * 0.88).toInt())
+        val inList = { r: Rect -> r.height() > 0 && r.width() > 0 && r.top >= list.top && r.bottom <= list.bottom }
+        val replies = ns.filter { isReplyLabel(it) && s.visible(it) && inList(Tk.rect(it)) }
+            .map { it to Tk.rect(it) }.sortedBy { it.second.top }
         val out = ArrayList<Row>()
-        var prevBottom = -1
-        for ((_, rr) in replies) {
-            val top = if (prevBottom < 0) rr.top - s.dp(200) else prevBottom - 2
-            val block = texts.filter { (n, r) ->
-                r.top >= top && r.bottom <= rr.top + s.dp(4) && r.left >= rr.left - s.dp(10) && r.right <= (W * 0.86).toInt() &&
-                    !SKIP_TEXT.matches(Tk.norm(n.text))
-            }.sortedWith(compareBy({ it.second.top }, { it.second.left }))
-            prevBottom = rr.bottom
-            if (block.isEmpty()) continue
-            val author = block.first().first.text.toString()
-            val bodyText = block.drop(1).joinToString(" ") { it.first.text.toString() }
-            val key = Tk.norm(author) + "|" + Tk.norm(bodyText).take(100) + if (bodyText.isBlank()) "|y" + (rr.top / 40) else ""
+        val usedRows = HashSet<String>()
+        for ((rn, rr) in replies) {
+            // sobe até o bloco do comentário (a linha larga da lista)
+            var row: AccessibilityNodeInfo? = rn.parent
+            var depth = 0
+            while (row != null && depth < 5 && Tk.rect(row).width() < W * 0.7) { row = row.parent; depth++ }
+            if (row == null) continue
+            val rowRect = Tk.rect(row)
+            if (!usedRows.add(rowRect.flattenToString())) continue
+            val kids = Tk.all(row).filter { s.visible(it) }
 
-            val rowTop = rr.top - s.dp(8); val rowBot = rr.bottom + s.dp(8)
-            // idade: texto na mesma linha, à esquerda do "Responder"
+            // nome + texto
+            val texts = kids.filter { n ->
+                !n.text.isNullOrBlank() && !SKIP_TEXT.matches(Tk.norm(n.text)) && Tk.parseAgeMinutes(n.text?.toString()) < 0 &&
+                    Tk.rect(n).bottom <= rr.top + s.dp(4) && Tk.rect(n).right <= (W * 0.97).toInt()
+            }.sortedWith(compareBy({ Tk.rect(it).top }, { Tk.rect(it).left }))
+            if (texts.isEmpty()) continue
+            val authorNode = kids.firstOrNull { (it.viewIdResourceName ?: "").endsWith(":id/title") && !it.text.isNullOrBlank() } ?: texts.first()
+            val author = authorNode.text.toString()
+            val bodyText = texts.filter { it !== authorNode && it.text.toString() != author }.joinToString(" ") { it.text.toString() }
+            if (!inList(Tk.rect(authorNode))) continue   // começo do comentário cortado lá em cima
+
+            // idade: na linha do "Responder"
             var age = -1L
-            for ((n, r) in texts) {
-                if (r.centerY() in rowTop..rowBot && r.right <= rr.left + s.dp(4)) {
+            var ageText = ""
+            for (n in kids) {
+                val r = Tk.rect(n)
+                if (Math.abs(r.centerY() - rr.centerY()) < s.dp(14) && r.right <= rr.left + s.dp(4)) {
                     val a = Tk.parseAgeMinutes(n.text?.toString())
-                    if (a >= 0) { age = a; break }
+                    if (a >= 0) { age = a; ageText = Tk.norm(n.text); break }
                 }
             }
-            // botão de curtir: à direita do comentário (na altura do texto ou do "Responder")
-            val blockTop = block.first().second.top
-            val lo = blockTop - s.dp(14); val hi = rr.bottom + s.dp(22)
-            val targets = ArrayList<Pair<AccessibilityNodeInfo, Boolean>>()
-            val seenRects = HashSet<String>()
-            for (n in vis) {
-                val r = Tk.rect(n)
-                if (r.centerY() !in lo..hi || r.centerX() <= W * 0.62 || r.width() > W * 0.35) continue
-                val anc = Tk.clickableAncestor(n)
-                val t = if (anc != null && Tk.rect(anc).width() < W * 0.4 && Tk.rect(anc).centerX() > W * 0.6) anc to false else n to true
-                if (seenRects.add(Tk.rect(t.first).flattenToString())) targets.add(t)
+            val key = Tk.norm(author) + "|" + Tk.norm(bodyText).take(100) + if (bodyText.isBlank()) "|$ageText" else ""
+
+            // coração: o botão que tem o número de curtidas (fica à direita, dentro do mesmo bloco)
+            var like: AccessibilityNodeInfo? = kids.firstOrNull { (it.viewIdResourceName ?: "").endsWith(":id/tv_like_count") }?.parent
+            if (like != null && Tk.rect(like).centerX() <= W * 0.6) like = null
+            if (like == null) {
+                val cands = kids.filter { n ->
+                    val r = Tk.rect(n)
+                    r.centerX() > W * 0.62 && r.width() in 1..(W * 0.3).toInt() && r.height() > 0 && !isDislike(n) &&
+                        (n.className?.toString() ?: "").let { c -> c.contains("Button") || c.contains("Image") || n.isClickable }
+                }
+                like = cands.filter { val l = Tk.label(it); l.contains("curt") || l.contains("like") }.firstOrNull()
+                    ?: cands.minWithOrNull(compareBy({ Tk.rect(it).left / s.dp(24) }, { Tk.rect(it).top }))
             }
-            val notDislike = targets.filter { !isDislike(it.first) }
-            val labeled = notDislike.filter { val l = Tk.all(it.first).joinToString(" ") { x -> Tk.label(x) }; l.contains("curt") || l.contains("like") }
-            val pick = (labeled.ifEmpty { notDislike }).minWithOrNull(compareBy({ Tk.rect(it.first).left / s.dp(24) }, { Tk.rect(it.first).top }))
-            val like = pick?.first
-            out.add(Row(key, author, age, rr, like, like?.let { likedState(it) }, pick?.second ?: false))
+            if (like != null) {
+                val lr = Tk.rect(like)
+                if (!inList(lr) || lr.height() < s.dp(14)) continue   // coração cortado: espera rolar
+            }
+            val tap = like != null && !like.isClickable
+            out.add(Row(key, author, age, rr, like, like?.let { likedState(it) }, tap, Tk.rect(authorNode).left))
         }
         return out
     }
 
     private fun isDislike(n: AccessibilityNodeInfo): Boolean {
         val l = Tk.all(n).joinToString(" ") { Tk.label(it) }
-        return Regex("nao curti|nao gost|dislike|descurtir comentario e ocultar").containsMatchIn(l)
+        return Regex("nao curti|nao gost|dislike|descurtir comentario e ocultar|joinha|compartilh|share").containsMatchIn(l)
     }
 
-    /** true = já curtido; false = não curtido; null = não sei. */
+    /** true = já curtido; false = não curtido; null = não sei (o TikTok atual não informa). */
     private fun likedState(n: AccessibilityNodeInfo): Boolean? {
         val all = Tk.all(n)
         if (all.any { it.isSelected || it.isChecked }) return true
@@ -294,49 +334,69 @@ object Jobs {
         return null
     }
 
+    /** Rola a lista mais ou menos meia tela, devagar (sem embalo), para não pular comentários. */
     private fun scrollComments(s: BotService): Boolean {
         val ns = s.nodes()
-        val list = ns.filter { it.isScrollable && s.visible(it) }
-            .map { it to Tk.rect(it) }
-            .filter { it.second.top > s.H * 0.2 || it.second.height() > s.H * 0.4 }
-            .filter { (n, _) -> Tk.all(n).any { isReplyLabel(it) } }
-            .maxByOrNull { it.second.width() * it.second.height() }
-        if (list != null && list.first.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true
+        val list = commentList(s, ns)
+        if (list != null && list.height() > s.dp(120)) {
+            val x = s.W * 0.45f
+            val y1 = list.bottom - list.height() * 0.12f
+            val y2 = list.top + list.height() * 0.38f
+            if (s.swipe(x, y1, x, y2, 750)) return true
+        }
+        val node = ns.firstOrNull { it.isScrollable && s.visible(it) && Tk.all(it).any { c -> isReplyLabel(c) } && Tk.rect(it).top > s.H * 0.2 }
+        if (node != null && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true
         val x = s.W * 0.45f
-        return s.swipe(x, s.H * 0.82f, x, s.H * 0.48f, 350)
+        return s.swipe(x, s.H * 0.78f, x, s.H * 0.55f, 750)
     }
 
-    private fun setOrder(s: BotService, order: Order, tag: String) {
-        val want = if (order == Order.RECENT) Regex("recente|newest|latest|mais novo") else Regex("relevan|top|principa|popular")
-        val header = s.nodes().filter { s.visible(it) && Tk.rect(it).top < s.H * 0.6 }.firstOrNull { n ->
+    private val SORT_OPTIONS = Regex("^(melhores|mais novos|mais recentes|mais relevantes|com midia|do criador|top|newest|best)$")
+
+    /** Menu de ordenação (Melhores / Mais novos / ...) está aberto? */
+    private fun sortMenuOpen(s: BotService, ns: List<AccessibilityNodeInfo>): Boolean =
+        ns.count { s.visible(it) && SORT_OPTIONS.matches(Tk.norm(it.text)) } >= 2
+
+    /** Se o menu de ordenação ficou aberto por engano, fecha antes de continuar. */
+    private fun closeSortMenu(s: BotService, tag: String) {
+        if (sortMenuOpen(s, s.nodes())) {
+            Log.i("$tag: menu de ordenação aberto por engano; fechando")
+            s.back(); s.nap(700)
+        }
+    }
+
+    /** Troca a ordem dos comentários uma vez, ao abrir o post. Retorna true se ficou na ordem pedida. */
+    private fun setOrder(s: BotService, order: Order, tag: String): Boolean {
+        val want = if (order == Order.RECENT) Regex("^(mais novos|mais recentes|recentes|newest|latest)$")
+                   else Regex("^(melhores|mais relevantes|relevantes|top|best|top comments)$")
+        val ns = s.nodes()
+        // cabeçalho "15.828 comentários" + ícone de filtro ao lado (o conjunto é clicável)
+        val header = ns.firstOrNull { n -> s.visible(n) && Tk.rect(n).top < s.H * 0.6 && COUNT_HEADER.matches(Tk.norm(n.text)) }
+        val target = header?.let { h ->
+            Tk.clickableAncestor(h)
+                ?: h.parent?.let { p -> Tk.all(p).firstOrNull { it !== h && (it.className?.toString() ?: "").contains("Image") } }
+        } ?: ns.firstOrNull { n ->
             val l = Tk.label(n)
-            Regex("comentarios mais|mais recentes|mais relevantes|recentes|relevantes|ordenar|sort|newest|top comments").containsMatchIn(l) &&
-                !n.isEditable && l.length < 60
+            s.visible(n) && Tk.rect(n).top < s.H * 0.6 && !n.isEditable && l.length < 60 &&
+                Regex("comentarios mais|ordenar|sort|mais recentes|mais relevantes").containsMatchIn(l)
         }
-        if (header == null) {
-            Log.i("$tag: não achei a ordenação dos comentários; usando a do TikTok")
+        if (target == null) {
+            Log.i("$tag: não achei o botão de ordenação; usando a ordem do TikTok")
             s.autoDump("sem-ordenacao")
-            return
+            return false
         }
-        if (want.containsMatchIn(Tk.label(header))) {
-            Log.i("$tag: ordem já está em ${order.label}")
-            return
+        if (!s.click(target)) { val r = Tk.rect(target); s.tap(r.centerX().toFloat(), r.centerY().toFloat()) }
+        val opt = s.waitFor(3000) { l -> l.firstOrNull { s.visible(it) && want.matches(Tk.norm(it.text)) } }
+        if (opt == null) {
+            Log.i("$tag: o menu de ordenação não abriu (ou não achei ${order.label})")
+            s.autoDump("sem-opcao-ordem")
+            if (sortMenuOpen(s, s.nodes())) { s.back(); s.nap(600) }
+            return false
         }
-        s.click(header)
-        s.nap(1200)
-        val opt = s.waitFor(3000) { ns ->
-            ns.filter { s.visible(it) }.firstOrNull { n ->
-                val l = Tk.label(n)
-                want.containsMatchIn(l) && l.length < 40 && !l.startsWith("comentarios")
-            }
-        }
-        if (opt != null) {
-            s.click(opt); s.nap(1500)
-            Log.i("$tag: ordem trocada para ${order.label}")
-        } else {
-            Log.i("$tag: não achei a opção ${order.label}")
-            s.back(); s.nap(600)
-        }
+        s.click(opt)
+        s.nap(1800)
+        if (sortMenuOpen(s, s.nodes())) { s.back(); s.nap(600) }
+        Log.i("$tag: ordem: ${opt.text} ✓")
+        return true
     }
 
     // ======================================================================

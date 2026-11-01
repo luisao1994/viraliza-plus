@@ -279,6 +279,22 @@ object Store {
     @Synchronized fun totalLiked(): Long = sp().getLong("totalLiked", 0)
     @Synchronized fun addTotal() { sp().edit().putLong("totalLiked", totalLiked() + 1).apply() }
 
+    // --- comentários já curtidos por post ---
+    // O TikTok não diz pro robô se o coração está vermelho; então guardamos o que já curtimos.
+    // Sem isso, rodar o mesmo post de novo DESCURTIRIA os comentários.
+    private fun likedFile(url: String): java.io.File {
+        val d = java.io.File(ctx.filesDir, "curtidos").apply { mkdirs() }
+        return java.io.File(d, Integer.toHexString(normUrl(url).hashCode()) + ".txt")
+    }
+
+    @Synchronized fun likedKeys(url: String): MutableSet<String> =
+        runCatching { likedFile(url).takeIf { it.exists() }?.readLines()?.filter { it.isNotBlank() }?.toHashSet() }
+            .getOrNull() ?: HashSet()
+
+    @Synchronized fun addLikedKey(url: String, key: String) {
+        runCatching { likedFile(url).appendText(key.replace("\n", " ") + "\n") }
+    }
+
     // --- utilidades ---
     fun normUrl(u: String): String {
         val m = Regex("/video/(\\d+)").find(u)
