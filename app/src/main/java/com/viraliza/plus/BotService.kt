@@ -3,6 +3,9 @@ package com.viraliza.plus
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.graphics.Bitmap
+import android.view.Display
+import android.annotation.TargetApi
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
@@ -254,6 +257,49 @@ class BotService : AccessibilityService() {
             if (System.currentTimeMillis() > end) return null
             nap(350)
         }
+    }
+
+    // ---------------- print da tela (Android 11+) ----------------
+
+    @Volatile private var lastShot = 0L
+    @Volatile var shotError: Int = 0
+
+    val canScreenshot: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+
+    /** Tira um print da tela inteira (só fica na memória). null se não der. */
+    fun screenshot(): Bitmap? {
+        checkStop()
+        if (paused) waitWhilePaused()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        // o Android só deixa ~3 prints por segundo
+        val wait = lastShot + 380 - System.currentTimeMillis()
+        if (wait > 0) nap(wait)
+        val bmp = shot30()
+        lastShot = System.currentTimeMillis()
+        return bmp
+    }
+
+    @TargetApi(Build.VERSION_CODES.R)
+    private fun shot30(): Bitmap? {
+        val latch = CountDownLatch(1)
+        var out: Bitmap? = null
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(r: ScreenshotResult) {
+                    try {
+                        val hw = Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
+                        out = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                        hw?.recycle()
+                    } catch (_: Throwable) {}
+                    runCatching { r.hardwareBuffer.close() }
+                    shotError = 0
+                    latch.countDown()
+                }
+                override fun onFailure(code: Int) { shotError = code; latch.countDown() }
+            })
+        } catch (_: Throwable) { shotError = -1; return null }
+        try { latch.await(3, TimeUnit.SECONDS) } catch (_: InterruptedException) { throw StopException() }
+        return out
     }
 
     // ---------------- ações ----------------

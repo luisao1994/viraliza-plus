@@ -1,5 +1,7 @@
 package com.viraliza.plus
 
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlin.random.Random
@@ -13,7 +15,9 @@ class Row(
     val like: AccessibilityNodeInfo?,
     val liked: Boolean?,  // null = não deu para saber
     val likeTap: Boolean = false,  // true = tocar com o "dedo" (o botão não aceita clique direto)
-    val indent: Int = replyRect.left   // esquerda do nome do autor (respostas ficam mais para a direita)
+    val indent: Int = replyRect.left,  // esquerda do nome do autor (respostas ficam mais para a direita)
+    val heartRect: Rect? = null,       // onde está o desenho do coração na tela
+    val likeCount: Long = -1           // número ao lado do coração (-1 = sem número)
 )
 
 /** Informações lidas da tela de um vídeo. */
@@ -127,6 +131,11 @@ object Jobs {
         var noLikeDumped = false
         var clickFails = 0
 
+        val useShots = s.canScreenshot
+        var shotWarned = false
+        if (!orderOk && cfg.order == Order.RECENT && cfg.maxAgeMin > 0)
+            Log.i("$tag: ⚠ a lista NÃO está em Mais novos: comentários mais velhos que ${RunConfig.ageLabel(cfg.maxAgeMin)} vão aparecer misturados e serão pulados (veja as linhas 'velho')")
+
         while (true) {
             s.checkStop()
             s.ensureTikTok(3000)
@@ -134,10 +143,16 @@ object Jobs {
             val ns = s.nodes()
             val rows = scanRows(s, ns)
             rows.forEach { mainLeft = minOf(mainLeft, it.indent) }
+            // um print por leitura: serve pra ver a cor de todos os corações da tela de uma vez
+            val anyNew = rows.any { it.key !in seen }
+            val shot = if (useShots && anyNew && !countOnly) s.screenshot() else null
+            if (useShots && anyNew && !countOnly && shot == null && !shotWarned) {
+                shotWarned = true
+                Log.i("$tag: ⚠ não consegui tirar print (código ${s.shotError}); sigo sem ver a cor. Se repetir, desligue e ligue o Viraliza+ na Acessibilidade.")
+            }
             if (firstScan) {
                 firstScan = false
-                Log.i("$tag: ${rows.size} comentários na tela · com coração: ${rows.count { it.like != null }} · já curtidos: ${rows.count { it.liked == true }}")
-                rows.take(3).forEach { r -> Log.i("   · ${r.key.take(60)} · idade=${r.ageMin}min · curtir=${r.like?.let { Tk.rect(it).toShortString() + " " + Tk.label(it).take(40) + if (r.likeTap) " (toque)" else "" } ?: "nenhum"} · estado=${r.liked}") }
+                Log.i("$tag: ${rows.size} comentários na tela · com coração: ${rows.count { it.like != null }} · print: ${if (shot != null) "ok" else "não"}")
                 if (rows.isEmpty() || rows.none { it.like != null }) s.autoDump("comentarios-abertos")
             }
             var acted = false
@@ -145,12 +160,14 @@ object Jobs {
             for (row in rows) {
                 if (!seen.add(row.key)) continue
                 fresh++
+                val who = row.author.take(22)
                 val isReply = row.indent > mainLeft + s.dp(20)
                 if (cfg.which == Which.MAIN && isReply) continue
                 if (cfg.which == Which.REPLIES && !isReply) continue
                 if (cfg.maxAgeMin > 0 && row.ageMin >= 0) {
                     if (row.ageMin > cfg.maxAgeMin) {
                         if (!isReply) oldStreak++
+                        Log.i("   · $who — velho (${RunConfig.ageLabel(row.ageMin)}), pulei")
                         // só dá pra parar aqui se a lista está mesmo em "Mais novos"
                         if (cfg.order == Order.RECENT && orderOk && oldStreak >= 4) {
                             Log.i("$tag: chegou nos comentários mais velhos que ${RunConfig.ageLabel(cfg.maxAgeMin)}")
@@ -159,7 +176,13 @@ object Jobs {
                         continue
                     } else if (!isReply) oldStreak = 0
                 }
-                if (row.liked == true || row.key in likedBefore) continue
+                if (row.key in likedBefore) { Log.i("   · $who — já curti antes (memória)"); continue }
+                val color = heartColor(s, shot, row.heartRect)
+                if (row.liked == true || color == true) {
+                    Log.i("   · $who — já está vermelho, pulei")
+                    Store.addLikedKey(p.url, row.key); likedBefore.add(row.key)
+                    continue
+                }
                 if (countOnly) {
                     done++
                     if (done % 25 == 0L) s.status("$tag · contando", "$done comentários até agora")
@@ -168,33 +191,36 @@ object Jobs {
                 }
                 val like = row.like
                 if (like == null) {
-                    if (!noLikeDumped) { noLikeDumped = true; Log.i("$tag: não achei o coração de '${row.author.take(30)}'"); s.autoDump("sem-coracao") }
+                    Log.i("   · $who — não achei o coração")
+                    if (!noLikeDumped) { noLikeDumped = true; s.autoDump("sem-coracao") }
                     continue
                 }
-                val clicked = if (row.likeTap) {
-                    // toca no desenho do coração (não no número), que é o alvo certo
-                    val heart = Tk.all(like).drop(1).firstOrNull { (it.className?.toString() ?: "").contains("Image") && Tk.rect(it).width() > 0 }
-                    val r = Tk.rect(heart ?: like)
-                    s.tap(r.centerX().toFloat(), r.centerY().toFloat())
-                } else s.click(like)
-                if (!clicked) {
+                val ok = tapAndConfirm(s, row, like, useShots)
+                if (ok == null) {
                     clickFails++
-                    Log.i("$tag: o toque no coração falhou")
+                    Log.i("   · $who — o toque no coração falhou")
                     if (clickFails >= 5) { s.autoDump("toque-falhou"); return done }
                     continue
                 }
+                if (!ok) {
+                    Log.i("   · $who — toquei mas não ficou vermelho (pulei)")
+                    s.autoDump("nao-ficou-vermelho")
+                    continue
+                }
+                Log.i("   · $who — curtiu ✓${if (row.likeCount >= 0) " (${row.likeCount}→${row.likeCount + 1})" else ""}")
                 done++
                 pacer.liked()
                 Store.addLikedKey(p.url, row.key)
                 likedBefore.add(row.key)
                 Store.updatePost(p.url) { it.liked++ }
-                s.status("$tag · ${done} curtidas", "Hoje: ${Store.likedToday()} · ${row.author.take(24)}")
+                s.status("$tag · ${done} curtidas", "Hoje: ${Store.likedToday()} · $who")
                 if (done >= goal) { Log.i("$tag: meta de ${cfg.perPost} curtidas no post"); return done }
                 if (pacer.dailyReached()) return done
                 pacer.waitNext(tag)
                 acted = true
                 break   // a tela pode ter mudado: lê de novo
             }
+            shot?.recycle()
             if (acted) continue
             if (fresh > 0) stale = 0
 
@@ -221,6 +247,48 @@ object Jobs {
             } else stale = 0
             if (countOnly && seen.size % 50 == 0) s.status("$tag · contando", "$done de ${seen.size} lidos")
         }
+    }
+
+    /**
+     * Toca no coração e confere se pegou: olha a cor (print) e o número de curtidas.
+     * true = curtiu · false = não pegou nem tentando de novo · null = o toque falhou.
+     * Só toca a segunda vez se a cor E o número disserem que não pegou (pra nunca descurtir por engano).
+     */
+    private fun tapAndConfirm(s: BotService, row: Row, like: AccessibilityNodeInfo, useShots: Boolean): Boolean? {
+        fun tapOnce(): Boolean = if (row.likeTap || !like.isClickable) {
+            val r = row.heartRect ?: Tk.rect(like)
+            s.tap(r.centerX().toFloat(), r.centerY().toFloat())
+        } else s.click(like)
+
+        fun countNow(): Long {
+            runCatching { like.refresh() }
+            return Tk.all(like).firstNotNullOfOrNull { x ->
+                if ((x.viewIdResourceName ?: "").endsWith(":id/tv_like_count")) Tk.parseCount(x.text?.toString()).takeIf { it >= 0 } else null
+            } ?: -1L
+        }
+
+        /** true = pegou · false = com certeza não pegou · null = não dá pra saber */
+        fun check(): Boolean? {
+            s.nap(650)
+            val bmp = if (useShots) s.screenshot() else null
+            val c = heartColor(s, bmp, row.heartRect)
+            bmp?.recycle()
+            val n = countNow()
+            val before = row.likeCount
+            val up = (before >= 0 && n > before) || (before < 0 && n >= 1)
+            val same = (before >= 0 && n == before) || (before < 0 && n < 0)
+            return when {
+                c == true || up -> true
+                c == false && same -> false
+                else -> null
+            }
+        }
+
+        if (!tapOnce()) return null
+        val first = check()
+        if (first != false) return true   // pegou, ou não dá pra conferir: confia no toque
+        if (!tapOnce()) return null
+        return check() != false
     }
 
     private fun isReplyLabel(n: AccessibilityNodeInfo): Boolean {
@@ -314,9 +382,54 @@ object Jobs {
                 if (!inList(lr) || lr.height() < s.dp(14)) continue   // coração cortado: espera rolar
             }
             val tap = like != null && !like.isClickable
-            out.add(Row(key, author, age, rr, like, like?.let { likedState(it) }, tap, Tk.rect(authorNode).left))
+            val heart = like?.let { l -> Tk.all(l).drop(1).firstOrNull { (it.className?.toString() ?: "").contains("Image") && Tk.rect(it).width() > 0 } }
+            val countNode = kids.firstOrNull { (it.viewIdResourceName ?: "").endsWith(":id/tv_like_count") }
+            val cnt = countNode?.text?.toString()?.let { Tk.parseCount(it) } ?: -1L
+            out.add(Row(key, author, age, rr, like, like?.let { likedState(it) }, tap, Tk.rect(authorNode).left,
+                heart?.let { Tk.rect(it) } ?: like?.let { heartGuess(s, Tk.rect(it)) }, cnt))
         }
         return out
+    }
+
+    /** Sem o desenho separado: o coração fica na parte esquerda do botão. */
+    private fun heartGuess(s: BotService, r: Rect): Rect {
+        val side = minOf(r.height(), s.dp(22))
+        return Rect(r.left + s.dp(6), r.centerY() - side / 2, r.left + s.dp(6) + side, r.centerY() + side / 2)
+    }
+
+    /**
+     * Olha a cor do coração no print.
+     * true = vermelho cheio (já curtido) · false = só contorno (não curtido) · null = não deu pra ver.
+     * Só olha o quadradinho do botão, então coração de emoji no texto do comentário não confunde.
+     */
+    fun heartColor(s: BotService, bmp: Bitmap?, r: Rect?): Boolean? {
+        if (bmp == null || r == null || r.width() <= 2 || r.height() <= 2) return null
+        val sx = bmp.width.toFloat() / s.W; val sy = bmp.height.toFloat() / s.H
+        val l = (r.left * sx).toInt().coerceIn(0, bmp.width - 1); val rt = (r.right * sx).toInt().coerceIn(l + 1, bmp.width)
+        val t = (r.top * sy).toInt().coerceIn(0, bmp.height - 1); val b = (r.bottom * sy).toInt().coerceIn(t + 1, bmp.height)
+        val bg = bmp.getPixel(l, t)
+        var total = 0; var red = 0; var ink = 0
+        val step = maxOf(1, (rt - l) / 24)
+        var y = t
+        while (y < b) {
+            var x = l
+            while (x < rt) {
+                val c = bmp.getPixel(x, y)
+                val R = Color.red(c); val G = Color.green(c); val B = Color.blue(c)
+                total++
+                if (R > 170 && R - G > 90 && R - B > 50) red++
+                if (Math.abs(R - Color.red(bg)) + Math.abs(G - Color.green(bg)) + Math.abs(B - Color.blue(bg)) > 90) ink++
+                x += step
+            }
+            y += step
+        }
+        if (total == 0) return null
+        val redPct = red * 100 / total
+        return when {
+            redPct >= 12 -> true          // coração vermelho preenchido
+            ink * 100 / total >= 3 -> false   // tem desenho (contorno) e não é vermelho
+            else -> null                  // quadradinho vazio: não deu pra ver
+        }
     }
 
     private fun isDislike(n: AccessibilityNodeInfo): Boolean {
@@ -371,31 +484,47 @@ object Jobs {
         val ns = s.nodes()
         // cabeçalho "15.828 comentários" + ícone de filtro ao lado (o conjunto é clicável)
         val header = ns.firstOrNull { n -> s.visible(n) && Tk.rect(n).top < s.H * 0.6 && COUNT_HEADER.matches(Tk.norm(n.text)) }
-        val target = header?.let { h ->
-            Tk.clickableAncestor(h)
-                ?: h.parent?.let { p -> Tk.all(p).firstOrNull { it !== h && (it.className?.toString() ?: "").contains("Image") } }
-        } ?: ns.firstOrNull { n ->
+        // o ícone de filtro ao lado do "15.828 comentários"
+        val icon = header?.parent?.let { p -> Tk.all(p).firstOrNull { it !== header && (it.className?.toString() ?: "").contains("Image") && Tk.rect(it).width() > 0 } }
+        val fallback = header?.let { Tk.clickableAncestor(it) } ?: ns.firstOrNull { n ->
             val l = Tk.label(n)
             s.visible(n) && Tk.rect(n).top < s.H * 0.6 && !n.isEditable && l.length < 60 &&
                 Regex("comentarios mais|ordenar|sort|mais recentes|mais relevantes").containsMatchIn(l)
         }
-        if (target == null) {
+        if (icon == null && fallback == null) {
             Log.i("$tag: não achei o botão de ordenação; usando a ordem do TikTok")
             s.autoDump("sem-ordenacao")
             return false
         }
-        if (!s.click(target)) { val r = Tk.rect(target); s.tap(r.centerX().toFloat(), r.centerY().toFloat()) }
-        val opt = s.waitFor(3000) { l -> l.firstOrNull { s.visible(it) && want.matches(Tk.norm(it.text)) } }
+        fun findOpt(ms: Long) = s.waitFor(ms) { l -> l.firstOrNull { s.visible(it) && want.matches(Tk.norm(it.text)) } }
+        var opt: AccessibilityNodeInfo? = null
+        // 1º: toque de "dedo" no ícone (o TikTok ignora o clique interno nesse botão)
+        val tapTarget = icon ?: header
+        if (tapTarget != null) {
+            val r = Tk.rect(tapTarget); s.tap(r.centerX().toFloat(), r.centerY().toFloat())
+            opt = findOpt(2500)
+        }
+        // 2º: clique interno no cabeçalho
+        if (opt == null && fallback != null) {
+            s.click(fallback)
+            opt = findOpt(2500)
+        }
         if (opt == null) {
             Log.i("$tag: o menu de ordenação não abriu (ou não achei ${order.label})")
             s.autoDump("sem-opcao-ordem")
             if (sortMenuOpen(s, s.nodes())) { s.back(); s.nap(600) }
             return false
         }
-        s.click(opt)
-        s.nap(1800)
-        if (sortMenuOpen(s, s.nodes())) { s.back(); s.nap(600) }
-        Log.i("$tag: ordem: ${opt.text} ✓")
+        val label = opt.text?.toString() ?: order.label
+        val orow = Tk.clickableAncestor(opt) ?: opt
+        val rr = Tk.rect(orow); s.tap(rr.centerX().toFloat(), rr.centerY().toFloat())
+        s.nap(1200)
+        if (sortMenuOpen(s, s.nodes())) {   // o toque não pegou: tenta o clique interno
+            s.click(orow); s.nap(1200)
+            if (sortMenuOpen(s, s.nodes())) { s.back(); s.nap(600); Log.i("$tag: não consegui escolher $label"); return false }
+        }
+        s.nap(800)
+        Log.i("$tag: ordem: $label ✓")
         return true
     }
 
