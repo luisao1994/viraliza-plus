@@ -91,6 +91,10 @@ object Jobs {
             if (info.likes >= 0) it.likes = info.likes
         }
         Log.i("$tag: @${info.author} · ${info.comments} comentários · botão: ${Tk.label(info.commentBtn!!).take(50)}")
+        // pausa o vídeo antes de abrir os comentários (um toque só; dois toques curtiriam o vídeo)
+        s.tap(s.W * 0.4f, s.H * 0.42f)
+        Log.i("$tag: vídeo pausado")
+        s.nap(800)
         s.click(info.commentBtn!!)
         var sheet = s.waitFor(5000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
         if (sheet == null) {
