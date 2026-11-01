@@ -475,6 +475,8 @@ class MainActivity : Activity() {
         c.addView(text(this, if (on) "Ligado ✓" else if (inSettings) "Ativado, mas não conectou" else "Desligado", 18f, if (on) T.good else T.bad, weight = 800), lp().margins(this, t = 8))
         c.addView(text(this, "O robô usa a permissão de Acessibilidade para tocar nos botões do TikTok. Ele só age quando você manda.", 13f, T.text2), lp().margins(this, t = 6))
         c.addView(button(this, if (on) "Abrir configurações de acessibilidade" else "Ligar o robô", if (on) BtnStyle.GHOST else BtnStyle.PRIMARY) { openAccessibility() }, lp().margins(this, t = 12))
+        c.addView(text(this, "No Xiaomi, ative o Início automático e deixe a bateria \"Sem restrições\", senão o celular desliga o robô quando fecha o app.", 12.5f, T.text3), lp().margins(this, t = 10))
+        c.addView(button(this, "Início automático", BtnStyle.GHOST) { openAutostart() }, lp().margins(this, t = 8))
         add(c, 4)
 
         val err = Store.lastError()
@@ -505,6 +507,13 @@ class MainActivity : Activity() {
         c3.addView(text(this, "O TikTok muda a tela às vezes. Abra no TikTok a tela onde o robô travou e toque 🩺 no balão. Ele salva um arquivo em Downloads/Viraliza; mande esse arquivo para o Claude ajustar o robô.", 13f, T.text2), lp().margins(this, t = 8))
         add(c3)
 
+        val cr = card(this).apply { background = rounded(this@MainActivity, T.accentSoft, 22) }
+        cr.addView(sectionLabel(this, "Deu problema?").apply { setTextColor(T.accentText) })
+        cr.addView(text(this, "Gera um arquivo com o registro e as telas do TikTok que o robô salvou quando falhou (${Log.dumps().size} telas salvas). Salva em Downloads/Viraliza e abre para você mandar. Mande esse arquivo para o Claude.", 13f, T.accentText), lp().margins(this, t = 6))
+        cr.addView(button(this, "📄  Gerar relatório para o Claude", BtnStyle.PRIMARY) { sendReport() }, lp().margins(this, t = 12))
+        cr.addView(button(this, "Apagar registro e telas", BtnStyle.GHOST) { Log.clear(); Log.clearDumps(); Store.clearError(); render() }, lp().margins(this, t = 8))
+        add(cr)
+
         val c4 = card(this)
         val head = hbox(this)
         head.addView(sectionLabel(this, "Registro"), lp(0, weight = 1f))
@@ -512,9 +521,8 @@ class MainActivity : Activity() {
             (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("log", Log.all()))
             toast("Registro copiado")
         })
-        head.addView(smallAction("Limpar") { Log.clear(); render() }, lp(-2).margins(this, l = 6))
         c4.addView(head)
-        val lines = Log.all().lines().takeLast(120).reversed().joinToString("\n").ifBlank { "Nada ainda." }
+        val lines = Log.all().lines().filter { it.isNotBlank() }.takeLast(150).reversed().joinToString("\n").ifBlank { "Nada ainda." }
         c4.addView(text(this, lines, 11.5f, T.text2).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }, lp().margins(this, t = 10))
         add(c4)
         add(text(this, "Viraliza+ v" + runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrDefault("?"), 12f, T.text3).apply { gravity = Gravity.CENTER }, 16)
@@ -543,7 +551,7 @@ class MainActivity : Activity() {
     private fun robotStuckCard(): View {
         val c = card(this).apply { background = rounded(this@MainActivity, T.surface, 20, T.warn, 1) }
         c.addView(text(this, "O robô está ativado, mas não conectou", 16f, T.text, weight = 800))
-        c.addView(text(this, "1. Em Acessibilidade, desligue o Viraliza+ robô e ligue de novo.\n2. Em Info do app › Economia de bateria, escolha \"Sem restrições\" e ative \"Início automático\".\n3. Se não resolver, reinicie o celular.", 13f, T.text2), lp().margins(this, t = 6))
+        c.addView(text(this, "Isso acontece quando o celular fecha o app. Para não acontecer mais:\n1. Toque \"Início automático\" abaixo e ative o Viraliza+.\n2. Em Info do app › Economia de bateria, escolha \"Sem restrições\".\n3. Nos apps recentes, segure o Viraliza+ e toque no cadeado 🔒.\nAgora: em Acessibilidade, desligue e ligue o Viraliza+ robô.", 13f, T.text2), lp().margins(this, t = 6))
         val tr = Store.traceText()
         c.addView(text(this, "Linha do tempo do robô (mande print):", 12.5f, T.text, weight = 800), lp().margins(this, t = 10))
         c.addView(text(this, tr.ifBlank { "(o Android ainda não tentou ligar o robô)" }, 11f, T.text2).apply { typeface = Typeface.MONOSPACE }, lp().margins(this, t = 4))
@@ -554,11 +562,35 @@ class MainActivity : Activity() {
         }
         val row = hbox(this)
         row.addView(button(this, "Acessibilidade", BtnStyle.PRIMARY) { openAccessibility() }, lp(0, weight = 1f))
-        row.addView(button(this, "Info do app", BtnStyle.GHOST) {
-            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-        }, lp(0, weight = 1f).margins(this, l = 8))
+        row.addView(button(this, "Início automático", BtnStyle.GHOST) { openAutostart() }, lp(0, weight = 1f).margins(this, l = 8))
         c.addView(row, lp().margins(this, t = 12))
+        c.addView(button(this, "Info do app (bateria)", BtnStyle.GHOST) {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }, lp().margins(this, t = 8))
         return c
+    }
+
+    private fun openAutostart() {
+        val tries = listOf(
+            android.content.ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
+            android.content.ComponentName("com.miui.securitycenter", "com.miui.appmanager.ApplicationsDetailsActivity")
+        )
+        for (cn in tries) {
+            val ok = runCatching { startActivity(Intent().setComponent(cn).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }.getOrDefault(false)
+            if (ok) return
+        }
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        toast("Procure \"Início automático\" e ative")
+    }
+
+    private fun sendReport() {
+        try {
+            val (uri, path) = Report.save(this)
+            toast("Relatório salvo em $path")
+            if (uri != null) startActivity(Report.shareIntent(uri))
+        } catch (e: Throwable) {
+            toast("Não consegui gerar: ${e.message}")
+        }
     }
 
     private fun robotOffDialog() {

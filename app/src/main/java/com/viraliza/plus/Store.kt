@@ -143,6 +143,7 @@ object Store {
 
     fun init(c: Context) {
         ctx = c.applicationContext
+        Log.init(c)
         if (!crashHook) {
             crashHook = true
             val prev = Thread.getDefaultUncaughtExceptionHandler()
@@ -292,17 +293,44 @@ object Store {
     }
 }
 
-/** Registro do que o robô fez (para conferir e mandar quando algo der errado). */
+/** Registro do que o robô fez. Fica salvo num arquivo, então não some quando o app fecha. */
 object Log {
-    private val lines = ArrayDeque<String>()
-    private val fmt = SimpleDateFormat("HH:mm:ss", Locale.US)
+    private val fmt = SimpleDateFormat("dd/MM HH:mm:ss", Locale.US)
+    private var dir: java.io.File? = null
+
+    fun init(c: Context) { dir = c.applicationContext.filesDir }
+    private fun file(): java.io.File? = dir?.let { java.io.File(it, "registro.txt") }
 
     @Synchronized fun i(msg: String) {
-        lines.addLast(fmt.format(Date()) + "  " + msg)
-        while (lines.size > 400) lines.removeFirst()
         android.util.Log.i("Viraliza", msg)
+        val f = file() ?: return
+        runCatching {
+            f.appendText(fmt.format(Date()) + "  " + msg + "\n")
+            if (f.length() > 250_000) {
+                val keep = f.readLines().takeLast(1200)
+                f.writeText(keep.joinToString("\n") + "\n")
+            }
+        }
     }
 
-    @Synchronized fun all(): String = lines.joinToString("\n")
-    @Synchronized fun clear() = lines.clear()
+    @Synchronized fun all(): String = runCatching { file()?.readText() ?: "" }.getOrDefault("")
+    @Synchronized fun clear() { runCatching { file()?.delete() } }
+
+    // --- fotos da tela (árvore de botões) salvas quando algo dá errado ---
+    private fun dumpsDir(): java.io.File? = dir?.let { java.io.File(it, "telas").apply { mkdirs() } }
+
+    @Synchronized fun saveDump(reason: String, body: String) {
+        val d = dumpsDir() ?: return
+        val name = SimpleDateFormat("ddMM-HHmmss", Locale.US).format(Date()) + "-" + reason.replace(Regex("[^a-zA-Z0-9-]"), "-").take(40) + ".txt"
+        runCatching {
+            java.io.File(d, name).writeText(body)
+            d.listFiles()?.sortedByDescending { it.lastModified() }?.drop(8)?.forEach { it.delete() }
+        }
+        i("📸 tela salva: $reason")
+    }
+
+    @Synchronized fun dumps(): List<java.io.File> =
+        dumpsDir()?.listFiles()?.sortedBy { it.lastModified() } ?: emptyList()
+
+    @Synchronized fun clearDumps() { dumpsDir()?.listFiles()?.forEach { it.delete() } }
 }

@@ -45,6 +45,7 @@ object Jobs {
             val r = runCatching { doPost(s, p, cfg, countOnly, pacer, tag) }
             r.exceptionOrNull()?.let { if (it is StopException) throw it else Log.i("$tag: erro ${it.message}") }
             val n = r.getOrDefault(0L)
+            if (n == 0L) s.autoDump("post-${i + 1}-zero")
             if (countOnly) {
                 totalCount += n
                 Store.updatePost(p.url) { it.exact = n; it.exactInfo = cfg.describe() }
@@ -78,7 +79,8 @@ object Jobs {
         s.ensureTikTok(8000)
         val info = s.waitFor(15000) { readVideo(s, it).takeIf { v -> v.commentBtn != null } }
         if (info == null) {
-            Log.i("$tag: não achei o botão de comentários (diagnóstico 🩺 ajuda a calibrar)")
+            Log.i("$tag: não achei o botão de comentários")
+            s.autoDump("sem-botao-comentarios")
             return 0
         }
         Store.updatePost(p.url) {
@@ -87,11 +89,12 @@ object Jobs {
             if (info.comments >= 0) it.comments = info.comments
             if (info.likes >= 0) it.likes = info.likes
         }
-        Log.i("$tag: @${info.author} · ${info.comments} comentários")
+        Log.i("$tag: @${info.author} · ${info.comments} comentários · botão: ${Tk.label(info.commentBtn!!).take(50)}")
         s.click(info.commentBtn!!)
         val sheet = s.waitFor(8000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
         if (sheet == null) {
-            Log.i("$tag: os comentários não abriram ou o post não tem comentários")
+            Log.i("$tag: os comentários não abriram (ou não achei o texto 'Responder')")
+            s.autoDump("comentarios-nao-abriram")
             return 0
         }
         s.nap(600)
@@ -104,6 +107,9 @@ object Jobs {
         var stale = 0
         var oldStreak = 0
         val goal = if (cfg.perPost > 0) cfg.perPost.toLong() else Long.MAX_VALUE
+        var firstScan = true
+        var noLikeDumped = false
+        var clickFails = 0
 
         while (true) {
             s.checkStop()
@@ -111,6 +117,12 @@ object Jobs {
             val ns = s.nodes()
             val rows = scanRows(s, ns)
             rows.forEach { mainLeft = minOf(mainLeft, it.replyRect.left) }
+            if (firstScan) {
+                firstScan = false
+                Log.i("$tag: ${rows.size} comentários na tela · com coração: ${rows.count { it.like != null }} · já curtidos: ${rows.count { it.liked == true }}")
+                rows.take(3).forEach { r -> Log.i("   · ${r.key.take(60)} · idade=${r.ageMin}min · curtir=${r.like?.let { Tk.rect(it).toShortString() + " " + Tk.label(it).take(40) } ?: "nenhum"}") }
+                if (rows.isEmpty() || rows.none { it.like != null }) s.autoDump("comentarios-abertos")
+            }
             var acted = false
             var fresh = 0
             for (row in rows) {
@@ -136,18 +148,26 @@ object Jobs {
                     if (done >= goal) return done
                     continue
                 }
-                val like = row.like ?: continue
-                if (s.click(like)) {
-                    done++
-                    pacer.liked()
-                    Store.updatePost(p.url) { it.liked++ }
-                    s.status("$tag · ${done} curtidas", "Hoje: ${Store.likedToday()} · ${row.author.take(24)}")
-                    if (done >= goal) { Log.i("$tag: meta de ${cfg.perPost} curtidas no post"); return done }
-                    if (pacer.dailyReached()) return done
-                    pacer.waitNext(tag)
-                    acted = true
-                    break   // a tela pode ter mudado: lê de novo
+                val like = row.like
+                if (like == null) {
+                    if (!noLikeDumped) { noLikeDumped = true; Log.i("$tag: não achei o coração de '${row.author.take(30)}'"); s.autoDump("sem-coracao") }
+                    continue
                 }
+                if (!s.click(like)) {
+                    clickFails++
+                    Log.i("$tag: o toque no coração falhou")
+                    if (clickFails >= 5) { s.autoDump("toque-falhou"); return done }
+                    continue
+                }
+                done++
+                pacer.liked()
+                Store.updatePost(p.url) { it.liked++ }
+                s.status("$tag · ${done} curtidas", "Hoje: ${Store.likedToday()} · ${row.author.take(24)}")
+                if (done >= goal) { Log.i("$tag: meta de ${cfg.perPost} curtidas no post"); return done }
+                if (pacer.dailyReached()) return done
+                pacer.waitNext(tag)
+                acted = true
+                break   // a tela pode ter mudado: lê de novo
             }
             if (acted) continue
             if (fresh > 0) stale = 0
@@ -273,6 +293,7 @@ object Jobs {
         }
         if (header == null) {
             Log.i("$tag: não achei a ordenação dos comentários; usando a do TikTok")
+            s.autoDump("sem-ordenacao")
             return
         }
         if (want.containsMatchIn(Tk.label(header))) {
@@ -330,8 +351,12 @@ object Jobs {
         }?.let { Tk.clickableAncestor(it) ?: it }
 
         // autor e legenda: textos embaixo à esquerda
+        val navWords = Regex("^(inicio|pagina inicial|amigos|caixa de entrada|perfil|loja|seguindo|para voce|explorar|home|friends|inbox|profile|shop)$")
         val bottomLeft = vis.filter { n ->
-            val r = Tk.rect(n); !n.text.isNullOrBlank() && r.top > H * 0.55 && r.left < W * 0.5 && r.right < W * 0.9
+            val r = Tk.rect(n); val t = Tk.norm(n.text)
+            !n.text.isNullOrBlank() && r.top > H * 0.5 && r.bottom < H * 0.92 && r.left < W * 0.5 && r.right < W * 0.9 &&
+                !navWords.matches(t) && !t.contains("som original") && !t.contains("original sound") &&
+                !(n.viewIdResourceName ?: "").contains("music")
         }.sortedBy { Tk.rect(it).top }
         val authorNode = bottomLeft.firstOrNull { it.text.toString().startsWith("@") }
             ?: bottomLeft.firstOrNull { n -> val t = n.text.toString(); !t.contains(' ') && t.length in 2..30 && Tk.parseCount(t) < 0 }
@@ -358,6 +383,7 @@ object Jobs {
         }
         if (copy == null) {
             Log.i("Não achei 'Copiar link' no Compartilhar")
+            s.autoDump("sem-copiar-link")
             s.back(); s.nap(600)
             return null
         }
@@ -379,6 +405,7 @@ object Jobs {
         s.ensureTikTok(0)
         val info = readVideo(s, s.nodes())
         if (info.shareBtn == null) {
+            s.autoDump("fila-sem-compartilhar")
             s.status("Abra um vídeo", "Deixe o vídeo aberto em tela cheia e toque ＋ Fila")
             return
         }
@@ -419,7 +446,7 @@ object Jobs {
             s.nodes().firstOrNull { s.visible(it) && Regex("^(pagina inicial|inicio|home)$").matches(Tk.label(it)) }?.let { s.click(it); s.nap(1500) }
             lupa = findSearchButton(s)
         }
-        if (lupa == null) { Log.i("Não achei a lupa de pesquisa"); s.status("Não achei a pesquisa", "Use 🩺 na tela inicial do TikTok"); return }
+        if (lupa == null) { Log.i("Não achei a lupa de pesquisa"); s.autoDump("sem-lupa"); s.status("Não achei a pesquisa", "Use 🩺 na tela inicial do TikTok"); return }
         s.click(lupa)
         val edit = s.waitFor(5000) { ns -> ns.firstOrNull { it.isEditable && s.visible(it) } }
         if (edit == null) { Log.i("Campo de pesquisa não apareceu"); return }
@@ -442,7 +469,7 @@ object Jobs {
 
         s.status("Pesquisando", "Lendo os resultados…")
         val card = s.waitFor(8000) { ns -> gridCards(s, ns).firstOrNull() }
-        if (card == null) { Log.i("Não achei os vídeos do resultado"); s.status("Sem resultados", "Use 🩺 na tela de resultados"); return }
+        if (card == null) { Log.i("Não achei os vídeos do resultado"); s.autoDump("sem-resultados"); s.status("Sem resultados", "Use 🩺 na tela de resultados"); return }
         s.click(card)
         s.nap(2500)
 
@@ -490,7 +517,7 @@ object Jobs {
         val f = s.nodes().filter { s.visible(it) && Tk.rect(it).top < s.H * 0.3 }.firstOrNull { n ->
             val l = Tk.label(n); l.contains("filtro") || l.contains("filter")
         }
-        if (f == null) { Log.i("Não achei o botão de filtros; seguindo sem filtro"); return }
+        if (f == null) { Log.i("Não achei o botão de filtros; seguindo sem filtro"); s.autoDump("sem-filtros"); return }
         s.click(f); s.nap(1500)
         fun pick(labels: List<String>, name: String) {
             val n = s.waitFor(2500) { ns -> ns.filter { s.visible(it) }.firstOrNull { x -> val l = Tk.label(x); labels.any { l == it || l.startsWith(it) } } }

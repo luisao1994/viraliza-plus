@@ -2,7 +2,6 @@ package com.viraliza.plus
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.content.ContentValues
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
@@ -310,30 +309,22 @@ class BotService : AccessibilityService() {
 
     // ---------------- diagnóstico ----------------
 
-    fun saveDiagnostic() {
+    /** Guarda a "foto" dos botões da tela atual (vai junto no relatório). */
+    fun autoDump(reason: String) {
         val root = tkRoot() ?: rootInActiveWindow
-        val pkg = root?.packageName ?: "?"
-        val header = "Viraliza+ diagnóstico · ${Date()} · app=$pkg · tela=${W}x$H · Android ${Build.VERSION.SDK_INT}\n\n"
-        val body = header + Tk.dump(root) + "\n\n--- registro ---\n" + Log.all()
-        val name = "viraliza-diag-" + SimpleDateFormat("ddMM-HHmmss", Locale.US).format(Date()) + ".txt"
+        val header = "motivo=$reason · app=${root?.packageName ?: "?"} · tela=${W}x$H\n"
+        Log.saveDump(reason, header + Tk.dump(root))
+    }
+
+    /** Botão 🩺: salva a tela atual e gera o relatório em Downloads/Viraliza. */
+    fun saveDiagnostic() {
+        autoDump("manual")
         try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                val cv = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, name)
-                    put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Viraliza")
-                }
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)!!
-                contentResolver.openOutputStream(uri)!!.use { it.write(body.toByteArray()) }
-                toast("Diagnóstico salvo em Downloads/Viraliza/$name")
-            } else {
-                val dir = getExternalFilesDir(null) ?: filesDir
-                File(dir, name).writeText(body)
-                toast("Diagnóstico salvo: ${dir.absolutePath}/$name")
-            }
-            Log.i("Diagnóstico salvo: $name")
+            val (_, path) = Report.save(this)
+            toast("Relatório salvo em $path")
+            Log.i("Relatório salvo: $path")
         } catch (e: Throwable) {
-            toast("Não consegui salvar o diagnóstico: ${e.message}")
+            toast("Não consegui salvar o relatório: ${e.message}")
         }
     }
 
