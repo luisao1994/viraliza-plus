@@ -64,7 +64,7 @@ class Overlay(private val svc: BotService) {
         root.addView(head)
 
         body = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        detailTv = tv("Toque em ＋ Fila num post", 11.5f, Color.argb(200, 255, 255, 255), false).apply {
+        detailTv = tv("Abra um vídeo no TikTok e toque ＋ Fila", 11.5f, Color.argb(200, 255, 255, 255), false).apply {
             maxWidth = ctx.dp(210)
             maxLines = 3
         }
@@ -137,7 +137,13 @@ class Overlay(private val svc: BotService) {
 
     fun show() {
         if (shown) return
-        runCatching { wm.addView(root, params); shown = true }
+        try {
+            wm.addView(root, params); shown = true
+            Store.trace("balão: na tela")
+        } catch (e: Throwable) {
+            Store.trace("balão: falhou ${e.javaClass.simpleName}")
+            Store.saveError("Balão não abriu: " + android.util.Log.getStackTraceString(e))
+        }
     }
 
     fun hide() {

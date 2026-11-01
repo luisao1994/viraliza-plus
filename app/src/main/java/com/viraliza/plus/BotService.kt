@@ -68,6 +68,7 @@ class BotService : AccessibilityService() {
             T.init(this)
             Fonts.init(this)
             overlay = Overlay(this)
+            main.post { overlay.show() }
             Log.i("Robô ligado")
         } catch (e: Throwable) {
             Store.saveError("Erro ao ligar o robô: " + android.util.Log.getStackTraceString(e))
@@ -88,8 +89,7 @@ class BotService : AccessibilityService() {
 
     private fun updateOverlayVisibility() {
         if (!hasOverlay) return
-        val inTk = foregroundPkg in Tk.PACKAGES
-        if (inTk || busy) overlay.show() else overlay.hide()
+        overlay.show()   // fica sempre na tela enquanto o robô estiver ligado
     }
 
     override fun onInterrupt() {}
