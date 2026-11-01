@@ -53,10 +53,17 @@ class BotService : AccessibilityService() {
     val W: Int get() = resources.displayMetrics.widthPixels
     val H: Int get() = realHeight()
 
+    override fun onCreate() {
+        super.onCreate()
+        Store.init(this)
+        Store.trace("robô: criado")
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         Store.init(this)
+        Store.trace("robô: conectado ✓")
         try {
             T.init(this)
             Fonts.init(this)
@@ -88,6 +95,7 @@ class BotService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: Intent?): Boolean {
+        Store.trace("robô: desconectado")
         stopTask()
         instance = null
         main.post { if (hasOverlay) runCatching { overlay.hide() } }
@@ -96,6 +104,7 @@ class BotService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        Store.trace("robô: destruído")
         stopTask()
         instance = null
         if (hasOverlay) runCatching { overlay.hide() }

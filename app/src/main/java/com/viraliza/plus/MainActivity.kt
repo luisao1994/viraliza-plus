@@ -544,6 +544,9 @@ class MainActivity : Activity() {
         val c = card(this).apply { background = rounded(this@MainActivity, T.surface, 20, T.warn, 1) }
         c.addView(text(this, "O robô está ativado, mas não conectou", 16f, T.text, weight = 800))
         c.addView(text(this, "1. Em Acessibilidade, desligue o Viraliza+ robô e ligue de novo.\n2. Em Info do app › Economia de bateria, escolha \"Sem restrições\" e ative \"Início automático\".\n3. Se não resolver, reinicie o celular.", 13f, T.text2), lp().margins(this, t = 6))
+        val tr = Store.traceText()
+        c.addView(text(this, "Linha do tempo do robô (mande print):", 12.5f, T.text, weight = 800), lp().margins(this, t = 10))
+        c.addView(text(this, tr.ifBlank { "(o Android ainda não tentou ligar o robô)" }, 11f, T.text2).apply { typeface = Typeface.MONOSPACE }, lp().margins(this, t = 4))
         val err = Store.lastError()
         if (err.isNotBlank()) {
             c.addView(text(this, "Erro encontrado (mande print para o Claude):", 12.5f, T.bad, weight = 800), lp().margins(this, t = 10))

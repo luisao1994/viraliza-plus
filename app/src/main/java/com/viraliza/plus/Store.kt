@@ -159,6 +159,16 @@ object Store {
         sp().edit().putString("lastError", "$stamp\n" + s.take(4000)).commit()
     }
 
+    /** Linha do tempo do robô (ligou, conectou, desligou...). */
+    fun trace(s: String) {
+        val stamp = SimpleDateFormat("dd/MM HH:mm:ss", Locale.US).format(Date())
+        val old = sp().getString("trace", "") ?: ""
+        val lines = (old.lines().filter { it.isNotBlank() } + "$stamp  $s").takeLast(12)
+        sp().edit().putString("trace", lines.joinToString("\n")).commit()
+    }
+
+    fun traceText(): String = sp().getString("trace", "") ?: ""
+
     fun lastError(): String = sp().getString("lastError", "") ?: ""
     fun clearError() { sp().edit().remove("lastError").apply() }
 
