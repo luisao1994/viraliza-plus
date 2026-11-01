@@ -260,6 +260,7 @@ class BotService : AccessibilityService() {
 
     fun click(n: AccessibilityNodeInfo): Boolean {
         checkStop()
+        if (paused) waitWhilePaused()
         val c = Tk.clickableAncestor(n)
         if (c != null && c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
         val r = Tk.rect(n)
@@ -278,6 +279,7 @@ class BotService : AccessibilityService() {
 
     private fun gesture(stroke: GestureDescription.StrokeDescription): Boolean {
         checkStop()
+        if (paused) waitWhilePaused()
         val latch = CountDownLatch(1)
         var ok = false
         val g = GestureDescription.Builder().addStroke(stroke).build()
