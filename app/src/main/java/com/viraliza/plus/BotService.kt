@@ -38,6 +38,7 @@ class BotService : AccessibilityService() {
 
     val main = Handler(Looper.getMainLooper())
     lateinit var overlay: Overlay
+    val hasOverlay: Boolean get() = ::overlay.isInitialized
     @Volatile private var worker: Thread? = null
     @Volatile var stopRequested = false
     @Volatile var paused = false
@@ -56,10 +57,15 @@ class BotService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         Store.init(this)
-        T.init(this)
-        Fonts.init(this)
-        overlay = Overlay(this)
-        Log.i("Robô ligado")
+        try {
+            T.init(this)
+            Fonts.init(this)
+            overlay = Overlay(this)
+            Log.i("Robô ligado")
+        } catch (e: Throwable) {
+            Store.saveError("Erro ao ligar o robô: " + android.util.Log.getStackTraceString(e))
+            Log.i("Erro ao ligar o robô: ${e.message}")
+        }
         Store.changed()
     }
 
@@ -74,6 +80,7 @@ class BotService : AccessibilityService() {
     }
 
     private fun updateOverlayVisibility() {
+        if (!hasOverlay) return
         val inTk = foregroundPkg in Tk.PACKAGES
         if (inTk || busy) overlay.show() else overlay.hide()
     }
@@ -83,7 +90,7 @@ class BotService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         stopTask()
         instance = null
-        main.post { runCatching { overlay.hide() } }
+        main.post { if (hasOverlay) runCatching { overlay.hide() } }
         Store.changed()
         return super.onUnbind(intent)
     }
@@ -91,7 +98,7 @@ class BotService : AccessibilityService() {
     override fun onDestroy() {
         stopTask()
         instance = null
-        runCatching { overlay.hide() }
+        if (hasOverlay) runCatching { overlay.hide() }
         Store.changed()
         super.onDestroy()
     }
@@ -106,7 +113,7 @@ class BotService : AccessibilityService() {
         stopRequested = false
         paused = false
         currentTask = name
-        main.post { overlay.show(); overlay.setRunning(true) }
+        main.post { if (hasOverlay) { overlay.show(); overlay.setRunning(true) } }
         worker = Thread {
             try {
                 Log.i("▶ $name")
@@ -120,7 +127,7 @@ class BotService : AccessibilityService() {
             } finally {
                 currentTask = ""
                 Store.changed()
-                main.post { overlay.setRunning(false); updateOverlayVisibility() }
+                main.post { if (hasOverlay) overlay.setRunning(false); updateOverlayVisibility() }
             }
         }.apply { isDaemon = true; start() }
         Store.changed()
@@ -135,12 +142,12 @@ class BotService : AccessibilityService() {
 
     fun togglePause() {
         paused = !paused
-        main.post { overlay.setPaused(paused) }
+        main.post { if (hasOverlay) overlay.setPaused(paused) }
         Log.i(if (paused) "⏸ Pausado por você" else "▶ Continuando")
     }
 
     fun status(title: String, detail: String) {
-        main.post { overlay.setStatus(title, detail) }
+        main.post { if (hasOverlay) overlay.setStatus(title, detail) }
     }
 
     fun toast(msg: String) = main.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }

@@ -64,6 +64,18 @@ class MainActivity : Activity() {
         root.addView(tabWrap, lp())
 
         setContentView(root)
+        // Android 15 desenha atrás das barras: empurra o conteúdo para dentro
+        root.setOnApplyWindowInsetsListener { v, ins ->
+            val top: Int; val bottom: Int
+            if (Build.VERSION.SDK_INT >= 30) {
+                val b = ins.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+                top = b.top; bottom = b.bottom
+            } else {
+                @Suppress("DEPRECATION") run { top = ins.systemWindowInsetTop; bottom = ins.systemWindowInsetBottom }
+            }
+            v.setPadding(0, top, 0, bottom)
+            ins
+        }
         window.statusBarColor = T.bg
         window.navigationBarColor = T.nav
         if (Build.VERSION.SDK_INT >= 23 && !T.dark) window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
@@ -111,8 +123,9 @@ class MainActivity : Activity() {
 
     private fun paintHeader() {
         val on = BotService.isOn
-        headerStatus.text = if (on) "● Robô ligado" else "● Robô desligado"
-        headerStatus.setTextColor(if (on) T.good else T.bad)
+        val stuck = !on && Store.enabledInSettings(this)
+        headerStatus.text = if (on) "● Robô ligado" else if (stuck) "● Robô não conectou" else "● Robô desligado"
+        headerStatus.setTextColor(if (on) T.good else if (stuck) T.warn else T.bad)
         headerStatus.background = rounded(this, if (on) T.goodSoft else T.surface2, 12)
     }
 
@@ -458,10 +471,26 @@ class MainActivity : Activity() {
         val c = card(this)
         c.addView(sectionLabel(this, "Robô"))
         val on = BotService.isOn
-        c.addView(text(this, if (on) "Ligado ✓" else "Desligado", 18f, if (on) T.good else T.bad, weight = 800), lp().margins(this, t = 8))
+        val inSettings = Store.enabledInSettings(this)
+        c.addView(text(this, if (on) "Ligado ✓" else if (inSettings) "Ativado, mas não conectou" else "Desligado", 18f, if (on) T.good else T.bad, weight = 800), lp().margins(this, t = 8))
         c.addView(text(this, "O robô usa a permissão de Acessibilidade para tocar nos botões do TikTok. Ele só age quando você manda.", 13f, T.text2), lp().margins(this, t = 6))
         c.addView(button(this, if (on) "Abrir configurações de acessibilidade" else "Ligar o robô", if (on) BtnStyle.GHOST else BtnStyle.PRIMARY) { openAccessibility() }, lp().margins(this, t = 12))
         add(c, 4)
+
+        val err = Store.lastError()
+        if (err.isNotBlank()) {
+            val ce = card(this)
+            val h = hbox(this)
+            h.addView(sectionLabel(this, "Último erro").apply { setTextColor(T.bad) }, lp(0, weight = 1f))
+            h.addView(smallAction("Copiar") {
+                (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("erro", err))
+                toast("Erro copiado")
+            })
+            h.addView(smallAction("Apagar") { Store.clearError(); render() }, lp(-2).margins(this, l = 6))
+            ce.addView(h)
+            ce.addView(text(this, err.take(2500), 11f, T.text2).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }, lp().margins(this, t = 8))
+            add(ce)
+        }
 
         val tk = Tk.installedPackage(this)
         val c2 = card(this)
@@ -496,12 +525,32 @@ class MainActivity : Activity() {
     // =================================================================
 
     private fun robotOffCard(): View {
+        if (Store.enabledInSettings(this)) return robotStuckCard()
         val c = card(this).apply { background = rounded(this@MainActivity, T.surface, 20, T.accent, 1) }
         c.addView(text(this, "Ligue o robô primeiro", 16f, T.text, weight = 800))
         c.addView(text(this, "Configurações › Acessibilidade › Apps instalados › Viraliza+ robô › Ativar.", 13f, T.text2), lp().margins(this, t = 6))
         c.addView(text(this, "Se aparecer \"Configuração restrita\": abra Informações do app do Viraliza+ › ⋮ (canto de cima) › Permitir configurações restritas, e tente de novo.", 12.5f, T.text3), lp().margins(this, t = 6))
         val row = hbox(this)
         row.addView(button(this, "Ligar o robô", BtnStyle.PRIMARY) { openAccessibility() }, lp(0, weight = 1f))
+        row.addView(button(this, "Info do app", BtnStyle.GHOST) {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }, lp(0, weight = 1f).margins(this, l = 8))
+        c.addView(row, lp().margins(this, t = 12))
+        return c
+    }
+
+    /** Está ligado nas configurações, mas o serviço não está rodando. */
+    private fun robotStuckCard(): View {
+        val c = card(this).apply { background = rounded(this@MainActivity, T.surface, 20, T.warn, 1) }
+        c.addView(text(this, "O robô está ativado, mas não conectou", 16f, T.text, weight = 800))
+        c.addView(text(this, "1. Em Acessibilidade, desligue o Viraliza+ robô e ligue de novo.\n2. Em Info do app › Economia de bateria, escolha \"Sem restrições\" e ative \"Início automático\".\n3. Se não resolver, reinicie o celular.", 13f, T.text2), lp().margins(this, t = 6))
+        val err = Store.lastError()
+        if (err.isNotBlank()) {
+            c.addView(text(this, "Erro encontrado (mande print para o Claude):", 12.5f, T.bad, weight = 800), lp().margins(this, t = 10))
+            c.addView(text(this, err.take(900), 11f, T.text2).apply { typeface = Typeface.MONOSPACE; setTextIsSelectable(true) }, lp().margins(this, t = 4))
+        }
+        val row = hbox(this)
+        row.addView(button(this, "Acessibilidade", BtnStyle.PRIMARY) { openAccessibility() }, lp(0, weight = 1f))
         row.addView(button(this, "Info do app", BtnStyle.GHOST) {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         }, lp(0, weight = 1f).margins(this, l = 8))

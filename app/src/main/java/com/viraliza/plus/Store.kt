@@ -139,7 +139,34 @@ object Store {
     private lateinit var ctx: Context
     private val listeners = mutableListOf<() -> Unit>()
 
-    fun init(c: Context) { ctx = c.applicationContext }
+    private var crashHook = false
+
+    fun init(c: Context) {
+        ctx = c.applicationContext
+        if (!crashHook) {
+            crashHook = true
+            val prev = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { t, e ->
+                runCatching { saveError("Travou: " + android.util.Log.getStackTraceString(e)) }
+                prev?.uncaughtException(t, e)
+            }
+        }
+    }
+
+    /** Guarda o último erro grave (aparece em Ajustes) para eu conseguir corrigir. */
+    fun saveError(s: String) {
+        val stamp = SimpleDateFormat("dd/MM HH:mm:ss", Locale.US).format(Date())
+        sp().edit().putString("lastError", "$stamp\n" + s.take(4000)).commit()
+    }
+
+    fun lastError(): String = sp().getString("lastError", "") ?: ""
+    fun clearError() { sp().edit().remove("lastError").apply() }
+
+    /** O robô está marcado como ligado nas configurações de Acessibilidade? */
+    fun enabledInSettings(c: Context): Boolean {
+        val s = android.provider.Settings.Secure.getString(c.contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        return s.split(':').any { it.startsWith(c.packageName + "/") }
+    }
     private fun sp() = ctx.getSharedPreferences(P, Context.MODE_PRIVATE)
 
     fun addListener(l: () -> Unit) { listeners.add(l) }
