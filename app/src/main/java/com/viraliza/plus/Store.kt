@@ -93,11 +93,12 @@ class RunConfig(
     var maxAgeMin: Long = 0,      // 0 = qualquer idade
     var perPost: Int = 0,         // 0 = todos
     var profile: String = "Conta forte",
-    var scrollSpeed: Int = 0          // rolagem: 0 normal · 1 rápida · 2 turbo
+    var scrollSpeed: Int = 0,         // rolagem: 0 normal · 1 rápida · 2 turbo
+    var whenDone: Int = 1             // ao terminar: 0 deixa aberto · 1 fecha o TikTok · 2 fecha e bloqueia a tela
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("which", which.name); put("order", order.name); put("maxAgeMin", maxAgeMin)
-        put("perPost", perPost); put("profile", profile); put("scrollSpeed", scrollSpeed)
+        put("perPost", perPost); put("profile", profile); put("scrollSpeed", scrollSpeed); put("whenDone", whenDone)
     }
 
     fun describe(): String {
@@ -110,7 +111,8 @@ class RunConfig(
             runCatching { Which.valueOf(o.optString("which")) }.getOrDefault(Which.MAIN),
             runCatching { Order.valueOf(o.optString("order")) }.getOrDefault(Order.RECENT),
             o.optLong("maxAgeMin"), o.optInt("perPost"), o.optString("profile", "Conta forte"),
-            o.optInt("scrollSpeed", if (o.optBoolean("fastScroll", false)) 1 else 0)
+            o.optInt("scrollSpeed", if (o.optBoolean("fastScroll", false)) 1 else 0),
+            o.optInt("whenDone", 1)
         )
 
         fun ageLabel(min: Long): String = when {

@@ -67,6 +67,7 @@ object Jobs {
             if (pacer.dailyReached()) {
                 Log.i("Limite diário do perfil atingido (${prof.dailyLimit}). Parando.")
                 s.status("Limite diário atingido", "Curtidas hoje: ${Store.likedToday()}")
+                finish(s, cfg, countOnly)
                 return
             }
         }
@@ -78,6 +79,14 @@ object Jobs {
             Log.i("Fila concluída: $totalLiked curtidas$why")
             s.status("Concluído ✓ $totalLiked curtidas", endReason?.replaceFirstChar { it.uppercase() } ?: "Fim da fila")
         }
+        finish(s, cfg, countOnly)
+    }
+
+    /** No fim da fila: fecha o TikTok (e bloqueia a tela) se foi pedido. */
+    private fun finish(s: BotService, cfg: RunConfig, countOnly: Boolean) {
+        if (countOnly || cfg.whenDone == 0) return
+        s.nap(1500)
+        s.closeTikTok(lock = cfg.whenDone == 2)
     }
 
     /** Abre um post, abre os comentários e percorre. Retorna curtidas dadas (ou comentários contados). */

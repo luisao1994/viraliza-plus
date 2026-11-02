@@ -219,6 +219,10 @@ class MainActivity : Activity() {
         cc.addView(Segmented(this, listOf(0 to "Normal", 1 to "Rápida", 2 to "Turbo"), cfg.scrollSpeed) {
             cfg.scrollSpeed = it; Store.runConfig = cfg; render()
         }.view, lp().margins(this, t = 6))
+        cc.addView(text(this, "Quando terminar a fila", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
+        cc.addView(Segmented(this, listOf(1 to "Fechar TikTok", 2 to "Fechar e bloquear", 0 to "Deixar aberto"), cfg.whenDone) {
+            cfg.whenDone = it; Store.runConfig = cfg; render()
+        }.view, lp().margins(this, t = 6))
         cc.addView(text(this, "Máximo por post (0 = todos)", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
         val per = input(this, "0", numeric = true, value = cfg.perPost.toString())
         per.addTextChangedListener(simpleWatcher { val c = Store.runConfig; c.perPost = it.toIntOrNull() ?: 0; Store.runConfig = c })

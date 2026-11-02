@@ -347,6 +347,21 @@ class BotService : AccessibilityService() {
 
     fun back() { performGlobalAction(GLOBAL_ACTION_BACK) }
 
+    /** Fecha o TikTok: vai pra tela inicial e encerra o app em segundo plano. Opcionalmente bloqueia a tela. */
+    fun closeTikTok(lock: Boolean) {
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        try { Thread.sleep(1800) } catch (_: InterruptedException) {}
+        val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+        Tk.PACKAGES.forEach { runCatching { am.killBackgroundProcesses(it) } }
+        try { Thread.sleep(600) } catch (_: InterruptedException) {}
+        val stillThere = runCatching { am.runningAppProcesses?.any { it.processName in Tk.PACKAGES } }.getOrNull()
+        Log.i("TikTok fechado" + if (stillThere == true) " (o sistema pode manter um pedaço dele em segundo plano)" else " ✓")
+        if (lock && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+            Log.i("Tela bloqueada")
+        }
+    }
+
     fun setText(n: AccessibilityNodeInfo, s: String): Boolean {
         val b = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, s) }
         return n.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, b)
