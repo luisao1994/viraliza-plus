@@ -31,6 +31,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Abrir o arquivo de configurações (ex.: pelo WhatsApp: Abrir com Viraliza+) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
         </activity>
 
         <!-- Recebe links compartilhados pelo TikTok (Compartilhar > Mais > Viraliza+) -->

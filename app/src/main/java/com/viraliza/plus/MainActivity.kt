@@ -89,6 +89,12 @@ class MainActivity : Activity() {
     }
 
     private fun handleShare(i: Intent?) {
+        if (i?.action == Intent.ACTION_VIEW && i.data != null) {
+            val u = i.data!!
+            tab = Tab.SETTINGS
+            window.decorView.post { handleImport(u) }
+            return
+        }
         val url = Store.extractUrl(i?.getStringExtra(Intent.EXTRA_TEXT)) ?: return
         Store.addToQueue(Post(url))
         tab = Tab.QUEUE
@@ -510,6 +516,13 @@ class MainActivity : Activity() {
         }
 
         val tk = Tk.installedPackage(this)
+        val cb = card(this)
+        cb.addView(sectionLabel(this, "Passar pra outro celular"))
+        cb.addView(text(this, "Exporta perfis de velocidade, fila de posts, pesquisas e ajustes num arquivo. Mande pelo WhatsApp, Drive ou Bluetooth e, no outro celular, toque em Importar.", 13f, T.text2), lp().margins(this, t = 6))
+        cb.addView(button(this, "📤  Exportar configurações", BtnStyle.PRIMARY) { exportConfig() }, lp().margins(this, t = 12))
+        cb.addView(button(this, "📥  Importar configurações", BtnStyle.GHOST) { pickImport() }, lp().margins(this, t = 8))
+        add(cb)
+
         val c2 = card(this)
         c2.addView(sectionLabel(this, "Números"))
         c2.addView(text(this, "TikTok: " + (tk ?: "não encontrado"), 14f, T.text), lp().margins(this, t = 8))
@@ -596,6 +609,52 @@ class MainActivity : Activity() {
         }
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
         toast("Procure \"Início automático\" e ative")
+    }
+
+    // ---------------- exportar / importar ----------------
+
+    private val REQ_IMPORT = 4711
+
+    private fun exportConfig() {
+        try {
+            val (uri, path) = Backup.save(this)
+            toast("Configurações salvas em $path")
+            if (uri != null) runCatching { startActivity(Backup.shareIntent(uri)) }
+        } catch (e: Throwable) {
+            Store.saveError("Exportar: " + android.util.Log.getStackTraceString(e))
+            toast("Não consegui exportar: ${e.message}")
+        }
+    }
+
+    private fun pickImport() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "application/octet-stream", "text/plain", "text/*"))
+        }
+        runCatching { startActivityForResult(i, REQ_IMPORT) }.onFailure { toast("Não achei o seletor de arquivos") }
+    }
+
+    @Deprecated("Activity simples, sem androidx")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_IMPORT || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        handleImport(uri)
+    }
+
+    private fun handleImport(uri: Uri) {
+        val parsed = try { Backup.read(this, uri) } catch (e: Throwable) {
+            AlertDialog.Builder(this).setTitle("Não deu pra importar").setMessage(e.message ?: "Arquivo inválido").setPositiveButton("OK", null).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Importar configurações")
+            .setMessage("O arquivo tem:\n${parsed.summary()}\n\nJuntar = mantém o que já tem aqui e acrescenta o que falta.\nSubstituir = apaga o daqui e fica igual ao outro celular.")
+            .setPositiveButton("Juntar") { _, _ -> toast(Backup.apply(parsed, replace = false)); render() }
+            .setNeutralButton("Substituir") { _, _ -> toast(Backup.apply(parsed, replace = true)); render() }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun sendReport() {

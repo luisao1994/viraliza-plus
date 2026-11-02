@@ -299,6 +299,26 @@ object Store {
         runCatching { likedFile(url).appendText(key.replace("\n", " ") + "\n") }
     }
 
+    /** Todos os arquivos de "já curtidos" (pro backup). */
+    @Synchronized fun likedDump(): Map<String, String> {
+        val d = java.io.File(ctx.filesDir, "curtidos")
+        return d.listFiles()?.associate { it.name to runCatching { it.readText() }.getOrDefault("") } ?: emptyMap()
+    }
+
+    @Synchronized fun likedRestore(o: JSONObject, replace: Boolean) {
+        val d = java.io.File(ctx.filesDir, "curtidos").apply { mkdirs() }
+        if (replace) d.listFiles()?.forEach { it.delete() }
+        val keys = o.keys()
+        while (keys.hasNext()) {
+            val name = keys.next()
+            if (!Regex("^[0-9a-f-]{1,12}\\.txt$").matches(name)) continue
+            val f = java.io.File(d, name)
+            val old = if (f.exists()) f.readLines().toHashSet() else HashSet()
+            val add = o.optString(name).lines().filter { l -> l.isNotBlank() && l !in old }
+            runCatching { f.appendText(add.joinToString("") { l -> l + "\n" }) }
+        }
+    }
+
     // --- utilidades ---
     fun normUrl(u: String): String {
         val m = Regex("/video/(\\d+)").find(u)
