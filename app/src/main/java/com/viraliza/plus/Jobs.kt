@@ -38,7 +38,11 @@ object Jobs {
     //  Curtir (ou só contar) comentários dos posts da fila
     // ======================================================================
 
+    /** Por que o último post terminou (mostrado no balão no fim). */
+    @Volatile private var endReason: String? = null
+
     fun likeQueue(s: BotService, posts: List<Post>, cfg: RunConfig, countOnly: Boolean) {
+        endReason = null
         val prof = Store.profile(cfg.profile)
         val pacer = Pacer(s, prof)
         Log.i((if (countOnly) "Contagem exata" else "Curtir") + ": ${posts.size} posts · ${cfg.describe()} · perfil ${prof.name} (${prof.summary()})")
@@ -70,8 +74,9 @@ object Jobs {
             Log.i("Contagem pronta: $totalCount comentários pra curtir")
             s.status("Contagem pronta ✓", "$totalCount comentários pra curtir · veja no app")
         } else {
-            Log.i("Fila concluída: $totalLiked curtidas")
-            s.status("Concluído ✓", "$totalLiked curtidas nesta rodada")
+            val why = endReason?.let { " · $it" } ?: ""
+            Log.i("Fila concluída: $totalLiked curtidas$why")
+            s.status("Concluído ✓ $totalLiked curtidas", endReason?.replaceFirstChar { it.uppercase() } ?: "Fim da fila")
         }
     }
 
@@ -171,6 +176,7 @@ object Jobs {
                         // só dá pra parar aqui se a lista está mesmo em "Mais novos"
                         if (cfg.order == Order.RECENT && orderOk && oldStreak >= 4) {
                             Log.i("$tag: chegou nos comentários mais velhos que ${RunConfig.ageLabel(cfg.maxAgeMin)}")
+                            endReason = "acabaram os comentários de até ${RunConfig.ageLabel(cfg.maxAgeMin)}"
                             return done
                         }
                         continue
@@ -222,7 +228,7 @@ object Jobs {
                 likedBefore.add(row.key)
                 Store.updatePost(p.url) { it.liked++ }
                 s.status("$tag · ${done} curtidas", "Hoje: ${Store.likedToday()} · $who")
-                if (done >= goal) { Log.i("$tag: meta de ${cfg.perPost} curtidas no post"); return done }
+                if (done >= goal) { Log.i("$tag: meta de ${cfg.perPost} curtidas no post"); endReason = "meta de ${cfg.perPost} por post"; return done }
                 if (pacer.dailyReached()) return done
                 pacer.waitNext(tag, tapAt)
                 acted = true
@@ -241,15 +247,16 @@ object Jobs {
             }
 
             // rolar a lista
-            if (!scrollComments(s)) {
+            if (!scrollComments(s, cfg.fastScroll)) {
                 Log.i("$tag: não consegui rolar a lista")
             }
-            s.nap(900)
+            s.nap(if (cfg.fastScroll) 450 else 900)
             val after = scanRows(s, s.nodes()).count { it.key !in seen }
             if (after == 0) {
                 stale++
                 if (stale >= 4) {
                     Log.i("$tag: fim dos comentários (${seen.size} lidos)")
+                    endReason = "chegou no fim dos comentários"
                     return done
                 }
             } else stale = 0
@@ -464,19 +471,20 @@ object Jobs {
     }
 
     /** Rola a lista mais ou menos meia tela, devagar (sem embalo), para não pular comentários. */
-    private fun scrollComments(s: BotService): Boolean {
+    private fun scrollComments(s: BotService, fast: Boolean = false): Boolean {
+        val dur = if (fast) 420L else 750L
         val ns = s.nodes()
         val list = commentList(s, ns)
         if (list != null && list.height() > s.dp(120)) {
             val x = s.W * 0.45f
             val y1 = list.bottom - list.height() * 0.10f
             val y2 = list.top + list.height() * 0.45f
-            if (s.swipe(x, y1, x, y2, 750)) return true
+            if (s.swipe(x, y1, x, y2, dur)) return true
         }
         val node = ns.firstOrNull { it.isScrollable && s.visible(it) && Tk.all(it).any { c -> isReplyLabel(c) } && Tk.rect(it).top > s.H * 0.2 }
         if (node != null && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true
         val x = s.W * 0.45f
-        return s.swipe(x, s.H * 0.78f, x, s.H * 0.55f, 750)
+        return s.swipe(x, s.H * 0.78f, x, s.H * 0.55f, dur)
     }
 
     private val SORT_OPTIONS = Regex("^(melhores|mais novos|mais recentes|mais relevantes|com midia|do criador|top|newest|best)$")

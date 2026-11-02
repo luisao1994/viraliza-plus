@@ -215,6 +215,10 @@ class MainActivity : Activity() {
         cc.addView(Choice(this, listOf(0L to "Qualquer", 60L to "1 hora", 360L to "6 horas", 1440L to "24 horas", 4320L to "3 dias", 10080L to "7 dias", 43200L to "30 dias"), cfg.maxAgeMin) {
             cfg.maxAgeMin = it; Store.runConfig = cfg; render()
         }.view, lp().margins(this, t = 6))
+        cc.addView(text(this, "Rolagem dos comentários", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
+        cc.addView(Segmented(this, listOf(false to "Normal", true to "Rápida"), cfg.fastScroll) {
+            cfg.fastScroll = it; Store.runConfig = cfg; render()
+        }.view, lp().margins(this, t = 6))
         cc.addView(text(this, "Máximo por post (0 = todos)", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
         val per = input(this, "0", numeric = true, value = cfg.perPost.toString())
         per.addTextChangedListener(simpleWatcher { val c = Store.runConfig; c.perPost = it.toIntOrNull() ?: 0; Store.runConfig = c })
