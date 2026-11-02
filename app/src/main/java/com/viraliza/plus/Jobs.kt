@@ -101,27 +101,11 @@ object Jobs {
             if (info.likes >= 0) it.likes = info.likes
         }
         Log.i("$tag: @${info.author} · ${info.comments} comentários · botão: ${Tk.label(info.commentBtn!!).take(50)}")
-        // pausa o vídeo antes de abrir os comentários (um toque só; dois toques curtiriam o vídeo)
-        s.tap(s.W * 0.4f, s.H * 0.42f)
-        Log.i("$tag: vídeo pausado")
-        s.nap(800)
-        s.click(info.commentBtn!!)
-        var sheet = s.waitFor(5000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
-        if (sheet == null) {
-            // tenta um toque "de dedo" no botão
-            Log.i("$tag: comentários não abriram com o clique; tentando toque na tela")
-            s.autoDump("apos-clique-comentarios")
-            val r = Tk.rect(info.commentBtn!!)
-            s.tap(r.centerX().toFloat(), r.centerY().toFloat())
-            sheet = s.waitFor(6000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
-        }
-        if (sheet == null) {
-            Log.i("$tag: os comentários não abriram (ou não achei o texto 'Responder')")
-            s.autoDump("comentarios-nao-abriram")
-            return 0
-        }
+        // pausa o vídeo antes de abrir os comentários (e confere pelo print que parou mesmo)
+        pauseVideo(s, tag)
+        if (!openSheet(s, info, tag)) return 0
         s.nap(600)
-        val orderOk = setOrder(s, cfg.order, tag)
+        var orderOk = setOrder(s, cfg.order, tag)
         val likedBefore = Store.likedKeys(p.url)
         if (likedBefore.isNotEmpty()) Log.i("$tag: ${likedBefore.size} comentários já curtidos antes neste post (vou pular)")
 
@@ -138,6 +122,9 @@ object Jobs {
 
         val useShots = s.canScreenshot
         var shotWarned = false
+        var lastAway = s.awayCount
+        var lastMotion = System.currentTimeMillis()
+        var lastSig = ""
         if (!orderOk && cfg.order == Order.RECENT && cfg.maxAgeMin > 0)
             Log.i("$tag: ⚠ a lista NÃO está em Mais novos: comentários mais velhos que ${RunConfig.ageLabel(cfg.maxAgeMin)} vão aparecer misturados e serão pulados (veja as linhas 'velho')")
 
@@ -145,6 +132,24 @@ object Jobs {
             s.checkStop()
             s.ensureTikTok(3000)
             closeSortMenu(s, tag)
+            // voltou de outro app? comentários fecharam? vídeo voltou a tocar? -> arruma antes de continuar
+            val cameBack = s.awayCount != lastAway
+            var sheetGone = commentList(s, s.nodes()) == null
+            if (sheetGone) { s.nap(800); sheetGone = commentList(s, s.nodes()) == null }
+            val timeToCheck = useShots && System.currentTimeMillis() - lastMotion > 45_000
+            if (cameBack || sheetGone || timeToCheck) {
+                if (cameBack) Log.i("$tag: voltou pro TikTok; conferindo o post e o vídeo")
+                else if (sheetGone) Log.i("$tag: os comentários fecharam; reabrindo")
+                val r = recover(s, p, cfg, tag, info, force = cameBack || sheetGone)
+                lastAway = s.awayCount
+                lastMotion = System.currentTimeMillis()
+                when (r) {
+                    -1 -> { Log.i("$tag: não consegui voltar pro post"); s.autoDump("nao-voltou-pro-post"); return done }
+                    1 -> { orderOk = true; stale = 0 }
+                    2 -> { orderOk = false; stale = 0 }
+                }
+                if (r != 0) continue
+            }
             val ns = s.nodes()
             val rows = scanRows(s, ns)
             rows.forEach { mainLeft = minOf(mainLeft, it.indent) }
@@ -251,15 +256,19 @@ object Jobs {
                 Log.i("$tag: não consegui rolar a lista")
             }
             s.nap(if (cfg.fastScroll) 450 else 900)
-            val after = scanRows(s, s.nodes()).count { it.key !in seen }
-            if (after == 0) {
+            val afterRows = scanRows(s, s.nodes())
+            val after = afterRows.count { it.key !in seen }
+            val sig = afterRows.joinToString("|") { it.key }
+            val moved = sig != lastSig
+            lastSig = sig
+            if (after == 0 && !moved) {
                 stale++
                 if (stale >= 4) {
                     Log.i("$tag: fim dos comentários (${seen.size} lidos)")
                     endReason = "chegou no fim dos comentários"
                     return done
                 }
-            } else stale = 0
+            } else if (after > 0) stale = 0
             if (countOnly && seen.size % 50 == 0) s.status("$tag · contando", "$done de ${seen.size} lidos")
         }
     }
@@ -312,6 +321,110 @@ object Jobs {
         }
         if (!tapOnce()) return null
         return check() != 0
+    }
+
+    // ======================================================================
+    //  Vídeo parado e comentários abertos (inclusive depois de sair e voltar)
+    // ======================================================================
+
+    /** Abre a lista de comentários do vídeo que está na tela. */
+    private fun openSheet(s: BotService, info: VideoInfo, tag: String): Boolean {
+        s.click(info.commentBtn!!)
+        var sheet = s.waitFor(5000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
+        if (sheet == null) {
+            Log.i("$tag: comentários não abriram com o clique; tentando toque na tela")
+            s.autoDump("apos-clique-comentarios")
+            val r = Tk.rect(info.commentBtn!!)
+            s.tap(r.centerX().toFloat(), r.centerY().toFloat())
+            sheet = s.waitFor(6000) { ns -> ns.firstOrNull { isReplyLabel(it) && s.visible(it) } }
+        }
+        if (sheet == null) {
+            Log.i("$tag: os comentários não abriram (ou não achei o texto 'Responder')")
+            s.autoDump("comentarios-nao-abriram")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * O vídeo está tocando? Compara prints seguidos de um pedaço do vídeo.
+     * true = mexendo · false = parado · null = sem print.
+     */
+    private fun videoMoving(s: BotService, sheetOpen: Boolean): Boolean? {
+        // com os comentários abertos o vídeo fica pequeno lá em cima; evita o balão (esquerda) e a lupa (direita)
+        val box = if (sheetOpen) Rect((s.W * 0.42).toInt(), (s.H * 0.08).toInt(), (s.W * 0.68).toInt(), (s.H * 0.28).toInt())
+                  else Rect((s.W * 0.42).toInt(), (s.H * 0.30).toInt(), (s.W * 0.78).toInt(), (s.H * 0.65).toInt())
+        val a = s.screenshot() ?: return null
+        try {
+            for (i in 0 until 2) {
+                s.nap(150)
+                val b = s.screenshot() ?: return null
+                val diff = frameDiff(s, a, b, box)
+                b.recycle()
+                if (diff) return true
+            }
+            return false
+        } finally { a.recycle() }
+    }
+
+    private fun frameDiff(s: BotService, a: Bitmap, b: Bitmap, box: Rect): Boolean {
+        if (a.width != b.width || a.height != b.height) return true
+        val sx = a.width.toFloat() / s.W; val sy = a.height.toFloat() / s.H
+        var total = 0; var changed = 0
+        for (iy in 0 until 30) for (ix in 0 until 30) {
+            val x = ((box.left + (box.width() * (ix + 0.5f) / 30)) * sx).toInt().coerceIn(0, a.width - 1)
+            val y = ((box.top + (box.height() * (iy + 0.5f) / 30)) * sy).toInt().coerceIn(0, a.height - 1)
+            val c1 = a.getPixel(x, y); val c2 = b.getPixel(x, y)
+            val d = Math.abs(Color.red(c1) - Color.red(c2)) + Math.abs(Color.green(c1) - Color.green(c2)) + Math.abs(Color.blue(c1) - Color.blue(c2))
+            total++
+            if (d > 40) changed++
+        }
+        return changed * 100 >= total * 3   // 3% dos pontos mudaram = está tocando
+    }
+
+    /** Na tela do vídeo (sem comentários abertos): toca pra pausar e confere pelo print. */
+    private fun pauseVideo(s: BotService, tag: String) {
+        for (i in 0 until 3) {
+            s.tap(s.W * 0.4f, s.H * 0.42f)   // um toque só (dois seguidos curtiriam o vídeo)
+            s.nap(900)
+            when (videoMoving(s, sheetOpen = false)) {
+                false -> { Log.i("$tag: vídeo pausado ✓"); return }
+                null -> { Log.i("$tag: vídeo pausado"); return }
+                true -> Log.i("$tag: o vídeo ainda está tocando; tocando de novo")
+            }
+        }
+    }
+
+    /**
+     * Garante: post certo, vídeo parado, comentários abertos.
+     * 0 = estava tudo certo · 1 = reabri (ordem ok) · 2 = reabri (ordem não trocou) · -1 = falhou.
+     */
+    private fun recover(s: BotService, p: Post, cfg: RunConfig, tag: String, info: VideoInfo, force: Boolean): Int {
+        val sheetOpen = commentList(s, s.nodes()) != null
+        if (sheetOpen) {
+            val moving = videoMoving(s, sheetOpen = true)
+            if (moving != true) return 0          // comentários abertos e vídeo parado: segue
+            Log.i("$tag: o vídeo voltou a tocar; fechando os comentários pra pausar")
+            s.back(); s.nap(1000)
+        } else if (!force) return 0
+
+        // está no mesmo post?
+        var v = readVideo(s, s.nodes())
+        val sameAuthor = info.author.isBlank() || Tk.norm(v.author) == Tk.norm(info.author)
+        val c1 = Tk.norm(info.caption).take(20); val c2 = Tk.norm(v.caption).take(20)
+        val sameCaption = c1.isBlank() || c2.isBlank() || c1 == c2
+        if (v.commentBtn == null || !sameAuthor || !sameCaption) {
+            Log.i("$tag: não estou mais no post certo; abrindo o link de novo")
+            if (!Tk.openUrl(s, p.url)) return -1
+            s.nap(2500)
+            s.ensureTikTok(8000)
+            v = s.waitFor(15000) { readVideo(s, it).takeIf { x -> x.commentBtn != null } } ?: return -1
+        }
+        pauseVideo(s, tag)
+        if (!openSheet(s, v, tag)) return -1
+        s.nap(600)
+        Log.i("$tag: de volta aos comentários (os já vistos são pulados)")
+        return if (setOrder(s, cfg.order, tag)) 1 else 2
     }
 
     private fun isReplyLabel(n: AccessibilityNodeInfo): Boolean {

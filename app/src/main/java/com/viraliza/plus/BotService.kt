@@ -46,6 +46,8 @@ class BotService : AccessibilityService() {
     @Volatile var paused = false
     @Volatile var currentTask: String = ""
     @Volatile private var foregroundPkg: String = ""
+    /** Quantas vezes o TikTok saiu da frente (outro app, tela inicial...). */
+    @Volatile var awayCount = 0
 
     private var clipLatch: CountDownLatch? = null
     @Volatile private var clipText: String? = null
@@ -103,6 +105,7 @@ class BotService : AccessibilityService() {
     private fun updateOverlayVisibility() {
         if (!hasOverlay) return
         val top = topAppPackage() ?: return   // sem certeza: não mexe
+        if (foregroundPkg in Tk.PACKAGES && top !in Tk.PACKAGES) awayCount++
         foregroundPkg = top
         if (top in Tk.PACKAGES || busy) overlay.show() else overlay.hide()
     }
@@ -206,9 +209,11 @@ class BotService : AccessibilityService() {
     fun ensureTikTok(waitMs: Long = 0): AccessibilityNodeInfo {
         val start = System.currentTimeMillis()
         var warned = false
+        var away = false
         while (true) {
             checkStop()
-            tkRoot()?.let { if (warned) Log.i("TikTok de volta"); return it }
+            tkRoot()?.let { if (warned) Log.i("TikTok de volta"); if (away) awayCount++; return it }
+            away = true
             if (System.currentTimeMillis() - start > waitMs && !warned) {
                 warned = true
                 status("Esperando o TikTok", "Volte para o TikTok para eu continuar")
