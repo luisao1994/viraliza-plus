@@ -131,10 +131,11 @@ object Jobs {
         while (true) {
             s.checkStop()
             s.ensureTikTok(3000)
-            closeSortMenu(s, tag)
+            var ns0 = s.nodes()
+            if (sortMenuOpen(s, ns0)) { closeSortMenu(s, tag); ns0 = s.nodes() }
             // voltou de outro app? comentários fecharam? vídeo voltou a tocar? -> arruma antes de continuar
             val cameBack = s.awayCount != lastAway
-            var sheetGone = commentList(s, s.nodes()) == null
+            var sheetGone = commentList(s, ns0) == null
             if (sheetGone) { s.nap(800); sheetGone = commentList(s, s.nodes()) == null }
             val timeToCheck = useShots && System.currentTimeMillis() - lastMotion > 45_000
             if (cameBack || sheetGone || timeToCheck) {
@@ -150,7 +151,7 @@ object Jobs {
                 }
                 if (r != 0) continue
             }
-            val ns = s.nodes()
+            val ns = if (sheetGone) s.nodes() else ns0
             val rows = scanRows(s, ns)
             rows.forEach { mainLeft = minOf(mainLeft, it.indent) }
             // um print por leitura: serve pra ver a cor de todos os corações da tela de uma vez
@@ -252,11 +253,19 @@ object Jobs {
             }
 
             // rolar a lista
-            if (!scrollComments(s, cfg.fastScroll)) {
+            val prevKeys = rows.map { it.key }.toSet()
+            if (!scrollComments(s, cfg.scrollSpeed)) {
                 Log.i("$tag: não consegui rolar a lista")
             }
-            s.nap(if (cfg.fastScroll) 450 else 900)
-            val afterRows = scanRows(s, s.nodes())
+            s.nap(when (cfg.scrollSpeed) { 2 -> 220L; 1 -> 450L; else -> 900L })
+            var afterRows = scanRows(s, s.nodes())
+            // proteção: se nenhum comentário de antes ficou na tela, a lista deslizou demais -> volta um pouco
+            if (cfg.scrollSpeed > 0 && prevKeys.isNotEmpty() && afterRows.isNotEmpty() && afterRows.none { it.key in prevKeys }) {
+                Log.i("$tag: a lista deslizou demais; voltando um pouco")
+                scrollBack(s)
+                s.nap(500)
+                afterRows = scanRows(s, s.nodes())
+            }
             val after = afterRows.count { it.key !in seen }
             val sig = afterRows.joinToString("|") { it.key }
             val moved = sig != lastSig
@@ -584,8 +593,15 @@ object Jobs {
     }
 
     /** Rola a lista mais ou menos meia tela, devagar (sem embalo), para não pular comentários. */
-    private fun scrollComments(s: BotService, fast: Boolean = false): Boolean {
-        val dur = if (fast) 420L else 750L
+    /** Rola pra cima uns 30% (quando a rolagem rápida passou do ponto). */
+    private fun scrollBack(s: BotService) {
+        val list = commentList(s, s.nodes()) ?: return
+        val x = s.W * 0.45f
+        s.swipe(x, list.top + list.height() * 0.30f, x, list.top + list.height() * 0.62f, 600)
+    }
+
+    private fun scrollComments(s: BotService, speed: Int = 0): Boolean {
+        val dur = when (speed) { 2 -> 240L; 1 -> 420L; else -> 750L }
         val ns = s.nodes()
         val list = commentList(s, ns)
         if (list != null && list.height() > s.dp(120)) {

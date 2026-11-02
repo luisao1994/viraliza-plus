@@ -216,8 +216,8 @@ class MainActivity : Activity() {
             cfg.maxAgeMin = it; Store.runConfig = cfg; render()
         }.view, lp().margins(this, t = 6))
         cc.addView(text(this, "Rolagem dos comentários", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
-        cc.addView(Segmented(this, listOf(false to "Normal", true to "Rápida"), cfg.fastScroll) {
-            cfg.fastScroll = it; Store.runConfig = cfg; render()
+        cc.addView(Segmented(this, listOf(0 to "Normal", 1 to "Rápida", 2 to "Turbo"), cfg.scrollSpeed) {
+            cfg.scrollSpeed = it; Store.runConfig = cfg; render()
         }.view, lp().margins(this, t = 6))
         cc.addView(text(this, "Máximo por post (0 = todos)", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
         val per = input(this, "0", numeric = true, value = cfg.perPost.toString())

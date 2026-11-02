@@ -93,16 +93,16 @@ class RunConfig(
     var maxAgeMin: Long = 0,      // 0 = qualquer idade
     var perPost: Int = 0,         // 0 = todos
     var profile: String = "Conta forte",
-    var fastScroll: Boolean = false   // rolagem rápida
+    var scrollSpeed: Int = 0          // rolagem: 0 normal · 1 rápida · 2 turbo
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("which", which.name); put("order", order.name); put("maxAgeMin", maxAgeMin)
-        put("perPost", perPost); put("profile", profile); put("fastScroll", fastScroll)
+        put("perPost", perPost); put("profile", profile); put("scrollSpeed", scrollSpeed)
     }
 
     fun describe(): String {
         val age = if (maxAgeMin > 0) " · até ${ageLabel(maxAgeMin)}" else ""
-        return "${which.label} · ${order.label}$age" + if (fastScroll) " · rolagem rápida" else ""
+        return "${which.label} · ${order.label}$age" + when (scrollSpeed) { 1 -> " · rolagem rápida"; 2 -> " · rolagem turbo"; else -> "" }
     }
 
     companion object {
@@ -110,7 +110,7 @@ class RunConfig(
             runCatching { Which.valueOf(o.optString("which")) }.getOrDefault(Which.MAIN),
             runCatching { Order.valueOf(o.optString("order")) }.getOrDefault(Order.RECENT),
             o.optLong("maxAgeMin"), o.optInt("perPost"), o.optString("profile", "Conta forte"),
-            o.optBoolean("fastScroll", false)
+            o.optInt("scrollSpeed", if (o.optBoolean("fastScroll", false)) 1 else 0)
         )
 
         fun ageLabel(min: Long): String = when {
