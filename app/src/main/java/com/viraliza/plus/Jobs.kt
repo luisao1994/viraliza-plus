@@ -253,18 +253,24 @@ object Jobs {
             }
 
             // rolar a lista
-            val prevKeys = rows.map { it.key }.toSet()
-            if (!scrollComments(s, cfg.scrollSpeed)) {
+            val prevTop = rows.associate { it.key to it.replyRect.top }
+            val listH = commentList(s, ns)?.height() ?: (s.H * 0.45).toInt()
+            val factor = scrollFactor.getOrPut(cfg.scrollSpeed) { if (cfg.scrollSpeed == 2) 0.65f else 1f }
+            if (!scrollComments(s, cfg.scrollSpeed, factor)) {
                 Log.i("$tag: não consegui rolar a lista")
             }
             s.nap(when (cfg.scrollSpeed) { 2 -> 220L; 1 -> 450L; else -> 900L })
-            var afterRows = scanRows(s, s.nodes())
-            // proteção: se nenhum comentário de antes ficou na tela, a lista deslizou demais -> volta um pouco
-            if (cfg.scrollSpeed > 0 && prevKeys.isNotEmpty() && afterRows.isNotEmpty() && afterRows.none { it.key in prevKeys }) {
-                Log.i("$tag: a lista deslizou demais; voltando um pouco")
-                scrollBack(s)
-                s.nap(500)
-                afterRows = scanRows(s, s.nodes())
+            val afterRows = scanRows(s, s.nodes())
+            // mede quanto a lista andou de verdade e ajusta a força da próxima rolagem (sem voltar pra trás)
+            if (cfg.scrollSpeed > 0 && prevTop.isNotEmpty() && afterRows.isNotEmpty()) {
+                val target = listH * 0.45f
+                val moved = afterRows.mapNotNull { r -> prevTop[r.key]?.let { it - r.replyRect.top } }.maxOrNull()
+                val nf = when {
+                    moved == null -> factor * 0.7f                       // passou do ponto: rola menos
+                    moved > s.dp(20) -> factor * (target / moved)        // ajusta pra andar ~45% da lista
+                    else -> factor
+                }.coerceIn(0.3f, 1.3f)
+                scrollFactor[cfg.scrollSpeed] = factor * 0.5f + nf * 0.5f   // muda aos poucos
             }
             val after = afterRows.count { it.key !in seen }
             val sig = afterRows.joinToString("|") { it.key }
@@ -593,21 +599,17 @@ object Jobs {
     }
 
     /** Rola a lista mais ou menos meia tela, devagar (sem embalo), para não pular comentários. */
-    /** Rola pra cima uns 30% (quando a rolagem rápida passou do ponto). */
-    private fun scrollBack(s: BotService) {
-        val list = commentList(s, s.nodes()) ?: return
-        val x = s.W * 0.45f
-        s.swipe(x, list.top + list.height() * 0.30f, x, list.top + list.height() * 0.62f, 600)
-    }
+    /** Força da rolagem aprendida para cada velocidade (1 = rápida, 2 = turbo). */
+    private val scrollFactor = HashMap<Int, Float>()
 
-    private fun scrollComments(s: BotService, speed: Int = 0): Boolean {
+    private fun scrollComments(s: BotService, speed: Int = 0, factor: Float = 1f): Boolean {
         val dur = when (speed) { 2 -> 240L; 1 -> 420L; else -> 750L }
         val ns = s.nodes()
         val list = commentList(s, ns)
         if (list != null && list.height() > s.dp(120)) {
             val x = s.W * 0.45f
             val y1 = list.bottom - list.height() * 0.10f
-            val y2 = list.top + list.height() * 0.45f
+            val y2 = y1 - list.height() * 0.45f * factor
             if (s.swipe(x, y1, x, y2, dur)) return true
         }
         val node = ns.firstOrNull { it.isScrollable && s.visible(it) && Tk.all(it).any { c -> isReplyLabel(c) } && Tk.rect(it).top > s.H * 0.2 }
