@@ -224,7 +224,13 @@ class MainActivity : Activity() {
         cc.addView(Choice(this, profs.map { it.name to it.name }, cfg.profile) {
             cfg.profile = it; Store.runConfig = cfg; render()
         }.view, lp().margins(this, t = 6))
-        cc.addView(text(this, Store.profile(cfg.profile).summary(), 12.5f, T.text3), lp().margins(this, t = 6))
+        val profRow = hbox(this)
+        profRow.addView(text(this, Store.profile(cfg.profile).summary(), 12.5f, T.text3), lp(0, weight = 1f))
+        profRow.addView(smallAction("⏱ Ajustar segundos") {
+            val i = Store.profiles().indexOfFirst { it.name == cfg.profile }
+            if (i >= 0) editProfile(i)
+        }, lp(-2).margins(this, l = 8))
+        cc.addView(profRow, lp().margins(this, t = 6))
         add(cc, 20)
 
         add(summaryCard(sel, cfg), 12)
@@ -425,6 +431,7 @@ class MainActivity : Activity() {
             return e
         }
         val name = field("Nome (ex.: nome da conta)", p.name, false)
+        box.addView(text(this, "O intervalo é contado a partir do toque no coração. Conferir se a curtida pegou leva ~1,5 s, então intervalos menores que isso ficam em ~1,5 s.", 12f, T.text3), lp().margins(this, t = 8))
         val dmin = field("Intervalo mínimo entre curtidas (segundos)", Profile.fmt(p.minDelay).replace(',', '.'), true, true)
         val dmax = field("Intervalo máximo entre curtidas (segundos)", Profile.fmt(p.maxDelay).replace(',', '.'), true, true)
         val wmin = field("Curte por quantos minutos antes de pausar (0 = sem)", p.workMinutes.toString(), true)

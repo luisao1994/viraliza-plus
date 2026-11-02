@@ -176,8 +176,10 @@ object Jobs {
                         continue
                     } else if (!isReply) oldStreak = 0
                 }
-                if (row.key in likedBefore) { Log.i("   · $who — já curti antes (memória)"); continue }
                 val color = heartColor(s, shot, row.heartRect)
+                // com print, quem manda é a cor (assim funciona trocando de conta no TikTok);
+                // a memória só vale quando não deu pra ver a cor
+                if (color == null && row.key in likedBefore) { Log.i("   · $who — já curti antes (memória)"); continue }
                 if (row.liked == true || color == true) {
                     Log.i("   · $who — já está vermelho, pulei")
                     Store.addLikedKey(p.url, row.key); likedBefore.add(row.key)
@@ -195,14 +197,20 @@ object Jobs {
                     if (!noLikeDumped) { noLikeDumped = true; s.autoDump("sem-coracao") }
                     continue
                 }
+                val tapAt = System.currentTimeMillis()
                 val ok = tapAndConfirm(s, row, like, useShots)
+                if (ok == UNLIKED) {
+                    Log.i("   · $who — já estava curtido (o número desceu); toquei de novo pra deixar curtido")
+                    Store.addLikedKey(p.url, row.key); likedBefore.add(row.key)
+                    continue
+                }
                 if (ok == null) {
                     clickFails++
                     Log.i("   · $who — o toque no coração falhou")
                     if (clickFails >= 5) { s.autoDump("toque-falhou"); return done }
                     continue
                 }
-                if (!ok) {
+                if (ok == false) {
                     Log.i("   · $who — toquei mas não ficou vermelho (pulei)")
                     s.autoDump("nao-ficou-vermelho")
                     continue
@@ -216,7 +224,7 @@ object Jobs {
                 s.status("$tag · ${done} curtidas", "Hoje: ${Store.likedToday()} · $who")
                 if (done >= goal) { Log.i("$tag: meta de ${cfg.perPost} curtidas no post"); return done }
                 if (pacer.dailyReached()) return done
-                pacer.waitNext(tag)
+                pacer.waitNext(tag, tapAt)
                 acted = true
                 break   // a tela pode ter mudado: lê de novo
             }
@@ -249,12 +257,15 @@ object Jobs {
         }
     }
 
+    private const val UNLIKED = 2
+
     /**
      * Toca no coração e confere se pegou: olha a cor (print) e o número de curtidas.
-     * true = curtiu · false = não pegou nem tentando de novo · null = o toque falhou.
+     * true = curtiu · false = não pegou nem tentando de novo · null = o toque falhou
+     * · UNLIKED = já estava curtido (o número desceu) e foi re-curtido.
      * Só toca a segunda vez se a cor E o número disserem que não pegou (pra nunca descurtir por engano).
      */
-    private fun tapAndConfirm(s: BotService, row: Row, like: AccessibilityNodeInfo, useShots: Boolean): Boolean? {
+    private fun tapAndConfirm(s: BotService, row: Row, like: AccessibilityNodeInfo, useShots: Boolean): Any? {
         fun tapOnce(): Boolean = if (row.likeTap || !like.isClickable) {
             val r = row.heartRect ?: Tk.rect(like)
             s.tap(r.centerX().toFloat(), r.centerY().toFloat())
@@ -267,28 +278,33 @@ object Jobs {
             } ?: -1L
         }
 
-        /** true = pegou · false = com certeza não pegou · null = não dá pra saber */
-        fun check(): Boolean? {
-            s.nap(650)
+        /** 1 = pegou · 0 = com certeza não pegou · -1 = descurtiu (número desceu) · null = não dá pra saber */
+        fun check(): Int? {
+            s.nap(600)
             val bmp = if (useShots) s.screenshot() else null
             val c = heartColor(s, bmp, row.heartRect)
             bmp?.recycle()
             val n = countNow()
             val before = row.likeCount
             val up = (before >= 0 && n > before) || (before < 0 && n >= 1)
+            val down = before >= 1 && n >= 0 && n < before
             val same = (before >= 0 && n == before) || (before < 0 && n < 0)
             return when {
-                c == true || up -> true
-                c == false && same -> false
+                c == true || up -> 1
+                down -> -1
+                c == false && same -> 0
                 else -> null
             }
         }
 
         if (!tapOnce()) return null
-        val first = check()
-        if (first != false) return true   // pegou, ou não dá pra conferir: confia no toque
+        when (check()) {
+            1, null -> return true      // pegou, ou não dá pra conferir: confia no toque
+            -1 -> { s.nap(400); tapOnce(); s.nap(500); return UNLIKED }
+            else -> {}
+        }
         if (!tapOnce()) return null
-        return check() != false
+        return check() != 0
     }
 
     private fun isReplyLabel(n: AccessibilityNodeInfo): Boolean {
@@ -340,18 +356,18 @@ object Jobs {
             if (row == null) continue
             val rowRect = Tk.rect(row)
             if (!usedRows.add(rowRect.flattenToString())) continue
-            val kids = Tk.all(row).filter { s.visible(it) }
+            val allKids = Tk.all(row)
+            val kids = allKids.filter { s.visible(it) }
 
-            // nome + texto
-            val texts = kids.filter { n ->
+            // nome + texto (lê mesmo se o começo estiver escondido em cima: comentário com GIF é alto)
+            val texts = allKids.filter { n ->
                 !n.text.isNullOrBlank() && !SKIP_TEXT.matches(Tk.norm(n.text)) && Tk.parseAgeMinutes(n.text?.toString()) < 0 &&
                     Tk.rect(n).bottom <= rr.top + s.dp(4) && Tk.rect(n).right <= (W * 0.97).toInt()
             }.sortedWith(compareBy({ Tk.rect(it).top }, { Tk.rect(it).left }))
             if (texts.isEmpty()) continue
-            val authorNode = kids.firstOrNull { (it.viewIdResourceName ?: "").endsWith(":id/title") && !it.text.isNullOrBlank() } ?: texts.first()
+            val authorNode = allKids.firstOrNull { (it.viewIdResourceName ?: "").endsWith(":id/title") && !it.text.isNullOrBlank() } ?: texts.first()
             val author = authorNode.text.toString()
             val bodyText = texts.filter { it !== authorNode && it.text.toString() != author }.joinToString(" ") { it.text.toString() }
-            if (!inList(Tk.rect(authorNode))) continue   // começo do comentário cortado lá em cima
 
             // idade: na linha do "Responder"
             var age = -1L
@@ -453,8 +469,8 @@ object Jobs {
         val list = commentList(s, ns)
         if (list != null && list.height() > s.dp(120)) {
             val x = s.W * 0.45f
-            val y1 = list.bottom - list.height() * 0.12f
-            val y2 = list.top + list.height() * 0.38f
+            val y1 = list.bottom - list.height() * 0.10f
+            val y2 = list.top + list.height() * 0.45f
             if (s.swipe(x, y1, x, y2, 750)) return true
         }
         val node = ns.firstOrNull { it.isScrollable && s.visible(it) && Tk.all(it).any { c -> isReplyLabel(c) } && Tk.rect(it).top > s.H * 0.2 }
@@ -758,7 +774,8 @@ class Pacer(private val s: BotService, private val p: Profile) {
 
     fun dailyReached() = p.dailyLimit > 0 && Store.likedToday() >= p.dailyLimit
 
-    fun waitNext(tag: String) {
+    /** Espera até a próxima curtida. `since` = hora do toque: o tempo de conferir já conta no intervalo. */
+    fun waitNext(tag: String, since: Long = System.currentTimeMillis()) {
         val byLikes = p.workLikes > 0 && sessionLikes >= p.workLikes
         val byTime = p.workMinutes > 0 && System.currentTimeMillis() - sessionStart >= p.workMinutes * 60_000L
         if (byLikes || byTime) {
@@ -777,7 +794,8 @@ class Pacer(private val s: BotService, private val p: Profile) {
         } else {
             val lo = minOf(p.minDelay, p.maxDelay); val hi = maxOf(p.minDelay, p.maxDelay)
             val sec = if (hi > lo) lo + Random.nextDouble() * (hi - lo) else lo
-            s.nap((sec * 1000).toLong().coerceAtLeast(150))
+            val left = (sec * 1000).toLong() - (System.currentTimeMillis() - since)
+            s.nap(left.coerceAtLeast(100))
         }
     }
 
@@ -785,7 +803,7 @@ class Pacer(private val s: BotService, private val p: Profile) {
         /** Tempo estimado (ms) para dar `likes` curtidas com o perfil. */
         fun estimate(p: Profile, likes: Long, posts: Int): Long {
             if (likes <= 0) return 0
-            val per = (p.minDelay + p.maxDelay) / 2.0 + 0.7          // + tempo de leitura/rolagem
+            val per = maxOf((p.minDelay + p.maxDelay) / 2.0, 1.4) + 0.4   // conferir a curtida leva ~1,4s
             val workMs = likes * per * 1000 + posts * 9000.0           // abrir cada post
             var perSession = Double.MAX_VALUE
             if (p.workLikes > 0) perSession = p.workLikes.toDouble()
