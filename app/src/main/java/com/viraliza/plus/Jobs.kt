@@ -44,7 +44,7 @@ object Jobs {
     fun likeQueue(s: BotService, posts: List<Post>, cfg: RunConfig, countOnly: Boolean) {
         endReason = null
         val prof = Store.profile(cfg.profile)
-        val pacer = Pacer(s, prof)
+        val pacer = Pacer(s, prof, cfg.leaveOnRest && !countOnly)
         Log.i((if (countOnly) "Contagem exata" else "Curtir") + ": ${posts.size} posts · ${cfg.describe()} · perfil ${prof.name} (${prof.summary()})")
         var totalLiked = 0L
         var totalCount = 0L
@@ -910,7 +910,7 @@ object Jobs {
 }
 
 /** Controla o ritmo: intervalo entre curtidas, ciclos de trabalho/pausa e limite diário. */
-class Pacer(private val s: BotService, private val p: Profile) {
+class Pacer(private val s: BotService, private val p: Profile, private val leaveOnRest: Boolean = false) {
     private var sessionStart = System.currentTimeMillis()
     private var sessionLikes = 0
 
@@ -931,10 +931,25 @@ class Pacer(private val s: BotService, private val p: Profile) {
             val minutes = if (hi > lo) Random.nextInt(lo, hi + 1) else lo
             val end = System.currentTimeMillis() + minutes * 60_000L
             Log.i("Descanso de $minutes min depois de $sessionLikes curtidas")
+            if (leaveOnRest) {
+                // sai do TikTok como uma pessoa faria; o balão continua com o contador na tela inicial
+                s.nap(1200 + Random.nextLong(0, 1500))
+                s.home()
+                Log.i("Saí do TikTok durante o descanso")
+            }
             while (System.currentTimeMillis() < end) {
                 val left = end - System.currentTimeMillis()
                 s.status("Descansando ☕ ${formatDuration(left)}", "$tag · volta sozinho · hoje: ${Store.likedToday()}")
                 s.nap(1000)
+            }
+            if (leaveOnRest) {
+                s.status("Voltando ao TikTok…", "$tag")
+                if (Tk.openApp(s)) {
+                    s.nap(2500 + Random.nextLong(0, 1500))
+                    s.ensureTikTok(8000)
+                    Log.i("Abri o TikTok de novo")
+                    // o laço do post percebe a volta e confere: post certo, vídeo pausado, comentários abertos
+                } else Log.i("Não consegui abrir o TikTok de volta")
             }
             sessionStart = System.currentTimeMillis()
             sessionLikes = 0

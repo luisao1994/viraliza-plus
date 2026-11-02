@@ -225,6 +225,10 @@ class MainActivity : Activity() {
         cc.addView(Segmented(this, listOf(0 to "Normal", 1 to "Rápida", 2 to "Turbo"), cfg.scrollSpeed) {
             cfg.scrollSpeed = it; Store.runConfig = cfg; render()
         }.view, lp().margins(this, t = 6))
+        cc.addView(text(this, "No descanso", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
+        cc.addView(Segmented(this, listOf(true to "Sair do TikTok", false to "Ficar no TikTok"), cfg.leaveOnRest) {
+            cfg.leaveOnRest = it; Store.runConfig = cfg; render()
+        }.view, lp().margins(this, t = 6))
         cc.addView(text(this, "Quando terminar a fila", 13f, T.text2, weight = 700), lp().margins(this, t = 12))
         cc.addView(Segmented(this, listOf(1 to "Fechar TikTok", 2 to "Fechar e bloquear", 0 to "Deixar aberto"), cfg.whenDone) {
             cfg.whenDone = it; Store.runConfig = cfg; render()

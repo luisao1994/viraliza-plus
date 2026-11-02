@@ -347,6 +347,9 @@ class BotService : AccessibilityService() {
 
     fun back() { performGlobalAction(GLOBAL_ACTION_BACK) }
 
+    /** Vai pra tela inicial do celular (o TikTok fica em segundo plano). */
+    fun home() { performGlobalAction(GLOBAL_ACTION_HOME); awayCount++ }
+
     /** Fecha o TikTok: vai pra tela inicial e encerra o app em segundo plano. Opcionalmente bloqueia a tela. */
     fun closeTikTok(lock: Boolean) {
         performGlobalAction(GLOBAL_ACTION_HOME)
