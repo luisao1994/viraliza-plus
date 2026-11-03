@@ -91,7 +91,7 @@ object Jobs {
 
     /** Abre um post, abre os comentários e percorre. Retorna curtidas dadas (ou comentários contados). */
     private fun doPost(s: BotService, p: Post, cfg: RunConfig, countOnly: Boolean, pacer: Pacer, tag: String): Long {
-        if (!Tk.openUrl(s, p.url)) {
+        if (!Tk.openUrl(s, Links.clean(p.url))) {
             Log.i("$tag: não consegui abrir o link no TikTok (${p.url})")
             return 0
         }
@@ -439,7 +439,7 @@ object Jobs {
         val sameCaption = c1.isBlank() || c2.isBlank() || c1 == c2
         if (v.commentBtn == null || !sameAuthor || !sameCaption) {
             Log.i("$tag: não estou mais no post certo; abrindo o link de novo")
-            if (!Tk.openUrl(s, p.url)) return -1
+            if (!Tk.openUrl(s, Links.clean(p.url))) return -1
             s.nap(2500)
             s.ensureTikTok(8000)
             v = s.waitFor(15000) { readVideo(s, it).takeIf { x -> x.commentBtn != null } } ?: return -1
@@ -534,7 +534,7 @@ object Jobs {
                     r.centerX() > W * 0.62 && r.width() in 1..(W * 0.3).toInt() && r.height() > 0 && !isDislike(n) &&
                         (n.className?.toString() ?: "").let { c -> c.contains("Button") || c.contains("Image") || n.isClickable }
                 }
-                like = cands.filter { val l = Tk.label(it); l.contains("curt") || l.contains("like") }.firstOrNull()
+                like = cands.filter { val l = Tk.label(it); l.contains("curt") || l.contains("like") || l.contains("gost") }.firstOrNull()
                     ?: cands.minWithOrNull(compareBy({ Tk.rect(it).left / s.dp(24) }, { Tk.rect(it).top }))
             }
             if (like != null) {
@@ -594,7 +594,7 @@ object Jobs {
 
     private fun isDislike(n: AccessibilityNodeInfo): Boolean {
         val l = Tk.all(n).joinToString(" ") { Tk.label(it) }
-        return Regex("nao curti|nao gost|dislike|descurtir comentario e ocultar|joinha|compartilh|share").containsMatchIn(l)
+        return Regex("nao curti|nao gost|dislike|descurtir comentario e ocultar|joinha|compartilh|partilh|share").containsMatchIn(l)
     }
 
     /** true = já curtido; false = não curtido; null = não sei (o TikTok atual não informa). */
@@ -718,11 +718,11 @@ object Jobs {
         v.commentBtn?.let { v.comments = countNear(it) }
 
         right.firstOrNull { n ->
-            val l = Tk.label(n); (l.contains("curt") || l.contains("like")) && !l.contains("coment") && !l.contains("comment")
+            val l = Tk.label(n); (l.contains("curt") || l.contains("like") || l.contains("gost")) && !l.contains("coment") && !l.contains("comment")
         }?.let { b -> v.likes = countNear(Tk.clickableAncestor(b) ?: b) }
 
         v.shareBtn = right.firstOrNull { n ->
-            val l = Tk.label(n); l.contains("compartilh") || l.contains("share")
+            val l = Tk.label(n); l.contains("compartilh") || l.contains("partilh") || l.contains("share")   // "partilhar" = português de Portugal
         }?.let { Tk.clickableAncestor(it) ?: it }
 
         // autor e legenda: textos embaixo à esquerda
@@ -756,7 +756,9 @@ object Jobs {
         s.click(share)
         val copy = s.waitFor(4000) { ns ->
             ns.filter { s.visible(it) }.firstOrNull { n ->
-                val l = Tk.label(n); l == "copiar link" || l.startsWith("copiar link") || l == "copy link" || l.startsWith("copy link") || l == "copiar"
+                val l = Tk.label(n)
+                l == "copiar link" || l.startsWith("copiar link") || l == "copy link" || l.startsWith("copy link") || l == "copiar" ||
+                    l.startsWith("copiar ligacao") || l.startsWith("copiar hiperligacao")   // Portugal
             }
         }
         if (copy == null) {
