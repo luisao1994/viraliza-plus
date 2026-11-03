@@ -42,6 +42,12 @@ class Overlay(private val svc: BotService) {
     private val pauseBtn: TextView
     private val stopBtn: TextView
     private val diagBtn: TextView
+    private val liveBtn: TextView
+    private val liveRow: LinearLayout
+    private val liveGo: TextView
+    private val liveClose: TextView
+    private val speedTv: TextView
+    private var liveMode = false
     val root: LinearLayout
 
     init {
@@ -75,12 +81,29 @@ class Overlay(private val svc: BotService) {
         pauseBtn = pill("⏸") { svc.togglePause() }
         stopBtn = pill("■") { svc.stopTask() }
         diagBtn = pill("🩺") { svc.saveDiagnostic() }
+        liveBtn = pill("❤ Live") { openLive() }
         btnRow.addView(addBtn)
+        btnRow.addView(liveBtn)
         btnRow.addView(pauseBtn)
         btnRow.addView(stopBtn)
         btnRow.addView(diagBtn)
         body.addView(btnRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(6) })
+
+        // controles do Modo Live
+        liveRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; visibility = View.GONE }
+        liveGo = pill("▶ Curtir") { startLive() }
+        val minus = pill("−") { Live.slower(ctx); showSpeed() }
+        speedTv = tv("", 12f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER; minWidth = ctx.dp(46)
+            layoutParams = LinearLayout.LayoutParams(-2, -2).apply { rightMargin = ctx.dp(6) }
+        }
+        val plus = pill("+") { Live.faster(ctx); showSpeed() }
+        liveClose = pill("✕") { closeLive() }
+        liveRow.addView(liveGo); liveRow.addView(minus); liveRow.addView(speedTv); liveRow.addView(plus); liveRow.addView(liveClose)
+        body.addView(liveRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ctx.dp(6) })
         root.addView(body)
+        Live.load(ctx)
+        showSpeed()
 
         setRunning(false)
         attachDrag(head)
@@ -117,6 +140,38 @@ class Overlay(private val svc: BotService) {
         svc.startTask("Adicionar post") { Jobs.grabCurrent(it) }
     }
 
+    // ---------------- Modo Live ----------------
+
+    private fun showSpeed() { speedTv.text = "${Live.speed}/s" }
+
+    private fun openLive() {
+        if (svc.busy) { svc.toast("Espere a tarefa atual terminar"); return }
+        liveMode = true
+        Live.showTarget(svc)
+        refreshLive(false)
+        setStatus("Modo Live ❤", "Arraste o ❤ para cima do vídeo da live e toque ▶ Curtir")
+    }
+
+    private fun startLive() {
+        if (svc.busy) return
+        svc.startTask("Curtir live") { Live.run(it) }
+    }
+
+    private fun closeLive() {
+        if (svc.busy) svc.stopTask()
+        liveMode = false
+        Live.hideTarget(svc)
+        refreshLive(false)
+        setStatus("Viraliza+", "")
+    }
+
+    private fun refreshLive(running: Boolean) {
+        liveRow.visibility = if (liveMode) View.VISIBLE else View.GONE
+        liveGo.visibility = if (running) View.GONE else View.VISIBLE
+        liveClose.visibility = if (running) View.GONE else View.VISIBLE
+        liveBtn.visibility = if (running || liveMode) View.GONE else View.VISIBLE
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun attachDrag(handle: View) {
         var sx = 0; var sy = 0; var tx = 0f; var ty = 0f; var moved = false
@@ -147,6 +202,7 @@ class Overlay(private val svc: BotService) {
         if (shown) return
         try {
             wm.addView(root, params); shown = true
+            if (liveMode) Live.showTarget(svc)
             Store.trace("balão: na tela")
         } catch (e: Throwable) {
             Store.trace("balão: falhou ${e.javaClass.simpleName}")
@@ -158,6 +214,7 @@ class Overlay(private val svc: BotService) {
         if (!shown) return
         runCatching { wm.removeView(root) }
         shown = false
+        Live.hideTarget(svc)
     }
 
     fun setStatus(title: String, detail: String) {
@@ -169,9 +226,14 @@ class Overlay(private val svc: BotService) {
     fun setRunning(on: Boolean) {
         pauseBtn.visibility = if (on) View.VISIBLE else View.GONE
         stopBtn.visibility = if (on) View.VISIBLE else View.GONE
-        addBtn.visibility = if (on) View.GONE else View.VISIBLE
+        addBtn.visibility = if (on || liveMode) View.GONE else View.VISIBLE
+        refreshLive(on)
         (dot.background as GradientDrawable).setColor(Color.parseColor(if (on) "#5FD08A" else "#FF4D7A"))
-        if (!on) { pauseBtn.text = "⏸"; if (titleTv.text.isNullOrBlank()) setStatus("Viraliza+", "") }
+        if (!on) {
+            pauseBtn.text = "⏸"
+            if (liveMode) setStatus("Modo Live ❤", "Parado · ${Live.taps} toques. ▶ para curtir de novo")
+            else if (titleTv.text.isNullOrBlank()) setStatus("Viraliza+", "")
+        }
     }
 
     fun setPaused(p: Boolean) {
