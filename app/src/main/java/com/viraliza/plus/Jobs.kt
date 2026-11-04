@@ -134,6 +134,8 @@ object Jobs {
         var lastAway = s.awayCount
         var lastMotion = System.currentTimeMillis()
         var lastSig = ""
+        var scrollsSinceLike = 0   // pro relatório: quantas rolagens até achar a próxima curtida
+        var fastSinceLike = 0      // ...quantas delas foram "pulando já vistos"
         if (!orderOk && cfg.order == Order.RECENT && cfg.maxAgeMin > 0)
             Log.i("$tag: ⚠ a lista NÃO está em Mais novos: comentários mais velhos que ${RunConfig.ageLabel(cfg.maxAgeMin)} vão aparecer misturados e serão pulados (veja as linhas 'velho')")
 
@@ -236,7 +238,9 @@ object Jobs {
                     s.autoDump("nao-ficou-vermelho")
                     continue
                 }
-                Log.i("   · $who — curtiu ✓${if (row.likeCount >= 0) " (${row.likeCount}→${row.likeCount + 1})" else ""}")
+                val trip = if (scrollsSinceLike > 0) " · ${scrollsSinceLike} rolagens" + (if (fastSinceLike > 0) " ($fastSinceLike pulando já vistos)" else "") else ""
+                Log.i("   · $who — curtiu ✓${if (row.likeCount >= 0) " (${row.likeCount}→${row.likeCount + 1})" else ""}$trip")
+                scrollsSinceLike = 0; fastSinceLike = 0
                 done++
                 pacer.liked()
                 Store.addLikedKey(p.url, row.key)
@@ -264,22 +268,27 @@ object Jobs {
             // rolar a lista
             val prevTop = rows.associate { it.key to it.replyRect.top }
             val listH = commentList(s, ns)?.height() ?: (s.H * 0.45).toInt()
-            val factor = scrollFactor.getOrPut(cfg.scrollSpeed) { if (cfg.scrollSpeed == 2) 0.65f else 1f }
-            if (!scrollComments(s, cfg.scrollSpeed, factor)) {
+            // tela só com comentários já vistos (ex.: depois do descanso a lista volta pro topo): passa rápido
+            val skipping = fresh == 0 && rows.isNotEmpty()
+            val speed = if (skipping) maxOf(cfg.scrollSpeed, 1) else cfg.scrollSpeed
+            val factor = scrollFactor.getOrPut(speed) { if (speed == 2) 0.65f else 1f }
+            if (!scrollComments(s, speed, factor)) {
                 Log.i("$tag: não consegui rolar a lista")
             }
-            s.nap(when (cfg.scrollSpeed) { 2 -> 220L; 1 -> 450L; else -> 900L })
+            scrollsSinceLike++
+            if (skipping) fastSinceLike++
+            s.nap(if (skipping) 200L else when (cfg.scrollSpeed) { 2 -> 220L; 1 -> 450L; else -> 900L })
             val afterRows = scanRows(s, s.nodes())
             // mede quanto a lista andou de verdade e ajusta a força da próxima rolagem (sem voltar pra trás)
-            if (cfg.scrollSpeed > 0 && prevTop.isNotEmpty() && afterRows.isNotEmpty()) {
+            if (speed > 0 && prevTop.isNotEmpty() && afterRows.isNotEmpty()) {
                 val target = listH * 0.45f
                 val moved = afterRows.mapNotNull { r -> prevTop[r.key]?.let { it - r.replyRect.top } }.maxOrNull()
                 val nf = when {
                     moved == null -> factor * 0.7f                       // passou do ponto: rola menos
                     moved > s.dp(20) -> factor * (target / moved)        // ajusta pra andar ~45% da lista
                     else -> factor
-                }.coerceIn(0.3f, 1.3f)
-                scrollFactor[cfg.scrollSpeed] = factor * 0.5f + nf * 0.5f   // muda aos poucos
+                }.coerceIn(0.5f, 1.3f)   // nunca menos da metade da força (senão rola quase nada e fica lento)
+                scrollFactor[speed] = factor * 0.5f + nf * 0.5f   // muda aos poucos
             }
             val after = afterRows.count { it.key !in seen }
             val sig = afterRows.joinToString("|") { it.key }
